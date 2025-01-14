@@ -1,7 +1,6 @@
 import os
 import datetime
 
-from dotenv import load_dotenv
 from flask_sqlalchemy import SQLAlchemy
 from flask_bcrypt import Bcrypt
 
