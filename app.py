@@ -1,5 +1,5 @@
 import os
-import secrets
+import random
 import string
 
 from dotenv import load_dotenv
@@ -9,6 +9,7 @@ from flask_jwt_extended import (
 )
 from payload import (
     api_ns, api, app, api_test,
+    add_crane_payload,
     general_output_payload,
     register_payload,
     forgot_password_payload,
@@ -25,10 +26,9 @@ logger = logging.getLogger(__file__)
 jwt = JWTManager(app)
 load_dotenv()
 
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("SQL_SERVER")  # 環境變數中的資料庫 URL
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("SQL_SERVER")
 app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY')
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False  # 關閉事件追蹤，提升性能
-
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False 
 db.init_app(app)
 with app.app_context():
     db.create_all()
@@ -51,6 +51,9 @@ class Register(Resource):
     @api.expect(register_payload)
     @api.marshal_with(general_output_payload)
     def post(self):
+        """
+        註冊
+        """
         data = api.payload
         username = data.get('username')
         email = data.get('email')
@@ -66,7 +69,7 @@ class Register(Resource):
             db.session.commit()
             
             logger.info(f'Register user:{username} id:{new_user.id}')
-            return {'status':0, 'result': '註冊成功}'}
+            return {'status':0, 'result': '註冊成功'}
         except Exception as e:
             error_class = e.__class__.__name__
             detail = e.args[0]
@@ -79,6 +82,9 @@ class login(Resource):
     @api.expect(login_payload)
     @api.marshal_with(general_output_payload)
     def post(self):
+        """
+        登入
+        """
         try:
             data = api.payload
             username = data.get('username')
@@ -86,7 +92,7 @@ class login(Resource):
 
             user = User.query.filter_by(username=username).first()
             if user and user.check_password(password):
-                access_token = create_access_token(identity=user.id)
+                access_token = create_access_token(identity=str(user.id))
                 return ({'status':0, 'result': access_token}), 200
 
             return {'status':1, 'result': '密碼或使用者名稱不相符'}
@@ -103,7 +109,7 @@ class ForgotPassword(Resource):
     @api.marshal_with(general_output_payload)
     def post(self):
         """
-        用戶忘記密碼的處理邏輯
+        忘記密碼
         """
         try:
             data = api.payload
@@ -111,9 +117,8 @@ class ForgotPassword(Resource):
 
             user = User.query.filter_by(email=email).first()
             if user:
-                characters = string.ascii_letters + string.digits + string.punctuation
-                random_password = ''.join(secrets.choice(characters) for _ in range(12))
-                hashed_password = bcrypt.hashpw(random_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+                random_password = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
+                hashed_password = bcrypt.generate_password_hash(random_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
                 db.session.query(User).filter_by(email=email).update({'password': hashed_password})
                 db.session.commit()
                 return {'status': 0, 'result': '密碼以寄送至信箱'}
@@ -129,41 +134,71 @@ class ForgotPassword(Resource):
 
 
 @api_ns.route('/api/auth', methods=['GET'])
-@jwt_required()
-class Auth(Resource):
+class Test(Resource):
+    @api.doc(params={'jwt': ''})
     @handle_request_exception
+    @jwt_required()
     def get(self):
-        current_user_id = get_jwt_identity()
-        user = User.query.get(current_user_id)
+        user = User.query.get(get_jwt_identity())
         return {'status': 0, 'result': user.username}
+    
+@api_ns.route('/api/trucklist', methods=['GET'])
+class TruckList(Resource):
+    @handle_request_exception
+    @api.marshal_with(general_output_payload)
+    # @jwt_required()
+    def get(self):
+        try:
+            trucks = Truck.query.all()
+            result = []
+            for truck in trucks:
+                result.append({
+                    'name': truck.name,
+                    'model': truck.model,
+                    'number': truck.number,
+                    'track_lifespan': truck.track_lifespan,
+                    'crane_lifespan': truck.crane_lifespan
+                })
+            return {'status':'0', 'result': result}
+        except Exception as e:
+            error_class = e.__class__.__name__
+            detail = e.args[0]
+            logger.warning(f"Add Truck Error: [{error_class}] detail: {detail}")
+            return {'status':'1', 'result': str(e)}
 
-# @api_ns.route('/api/addtruck', methods=['GET'])
-# def truck(Resource):
-#     try:
-#         data = api.payload
-#         name = data.get('name')
-#         model = data.get('model')
-#         number = data.get('number')
-#         track_day = data.get('track_day')
-#         truck_day = data.get('truck_day')
+@api_ns.route('/api/addtruck', methods=['POST'])
+class Addcrane(Resource):
+    @handle_request_exception
+    @api.expect(add_crane_payload)
+    @api.marshal_with(general_output_payload)
+    @jwt_required()
+    def post(self):
+        try:
+            data = api.payload
+            name = data.get('name')
+            img = data.get('img')
+            model = data.get('model')
+            number = data.get('number')
+            track_lifespan = data.get('track_lifespan')
+            crane_lifespan = data.get('crane_lifespan')
 
-#         if Truck.query.filter_by(name=name).first():
-#             return ({'status':'1', 'result': 'Truck already exists'}), 400
-        
-#         current_user_id = User.query.get(get_jwt_identity())
+            if Truck.query.filter_by(name=name).first():
+                return {'status':'1', 'result': 'Truck already exists'}
+            
+            user = User.query.get(get_jwt_identity())
 
-#         if current_user_id.permission < 1:
-#             return ({'status':'1', 'result': 'Permission denied'}), 400
-        
-#         new_truck = Truck(name=name, model=model, number=number, track_day=track_day, truck_day=truck_day)
-#         db.session.add(new_truck)
-#         db.session.commit()
-#         return ({'status':'0', 'result': '新增成功'}), 201
-#     except Exception as e:
-#         error_class = e.__class__.__name__
-#         detail = e.args[0]
-#         logger.warning(f"Add Truck Error: [{error_class}] detail: {detail}")
-#         return ({'status':'1', 'result': str(e)}), 500
+            if user.permission < 0:
+                return {'status':'1', 'result': '權限不足'}
+            
+            new_truck = Truck(name=name, img=img, model=model, number=number, track_lifespan=track_lifespan, crane_lifespan=crane_lifespan)
+            db.session.add(new_truck)
+            db.session.commit()
+            return {'status':'0', 'result': '新增成功'}
+        except Exception as e:
+            error_class = e.__class__.__name__
+            detail = e.args[0]
+            logger.warning(f"Add Truck Error: [{error_class}] detail: {detail}")
+            return {'status':'1', 'result': str(e)}
 
    
 # @api_ns.route("/users")

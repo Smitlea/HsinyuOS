@@ -1,6 +1,7 @@
 import os
 import datetime
 
+from dotenv import load_dotenv
 from flask_sqlalchemy import SQLAlchemy
 from flask_bcrypt import Bcrypt
 
@@ -32,8 +33,19 @@ class Truck(BaseTable):
     img = db.Column(db.String(150), nullable=True)
     model = db.Column(db.String(150), nullable=False)
     number = db.Column(db.String(150), nullable=False)
-    track_day = db.Column(db.Integer, nullable=False)
-    truck_day = db.Column(db.Integer, nullable=True)
+    track_lifespan = db.Column(db.Integer,default=0, nullable=False)
+    crane_lifespan = db.Column(db.Integer,default=0, nullable=False)
+
+if __name__ == '__main__':
+    dotenv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+    if os.path.exists(dotenv_path):
+        load_dotenv(dotenv_path)
+
+    db.drop_all()
+    db.create_all()
+
+
+
 
     
 # if __name__ == "__main__":

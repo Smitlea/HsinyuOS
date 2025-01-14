@@ -5,8 +5,11 @@ app = Flask("app")
 api = Api(app, version='0.0.1', title='奇美OpenAI Automation模擬', doc='/api/doc')
 api_ns = Namespace("HsinyuOS", "all right reserve", path="/")
 api_test = Namespace("test", "Test API Here", path="/")
+
 api.add_namespace(api_ns)
 api.add_namespace(api_test)
+    
+
 register_payload = api_ns.model(
     "註冊輸入",
     {
@@ -24,10 +27,18 @@ login_payload = api_ns.model(
     },
 )
 
-forgot_password_payload = api.model('ForgotPasswordPayload', {
+forgot_password_payload = api_ns.model('ForgotPasswordPayload', {
     'email': fields.String(required=True, description='User email for password reset')
 })
 
+add_crane_payload = api_ns.model('AddTruck', {
+        'name': fields.String(required=True, description='代號'),
+        'img': fields.String(required=True, description='圖片'),
+        'model': fields.String(required=True, description='車型'),
+        'number': fields.String(required=True, description='車號'),
+        'track_lifespan': fields.Integer(required=True, description='履帶壽命'),
+        'crane_lifespan': fields.Integer(required=True, description='吊車壽命')
+})
 
 general_output_payload = api_ns.model(
     "general Output",
