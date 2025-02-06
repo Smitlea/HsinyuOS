@@ -6,7 +6,7 @@ API_URL = "http://localhost:5000/api/trucklist"  # Replace with your actual API 
 def get_truck_list():
     try:
         response = requests.get(API_URL)
-        if response.status_code == 200:
+        if response.status_cosde == 200:
             data = response.json()
             print(data)
             if data['status'] == '0':

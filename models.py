@@ -36,6 +36,15 @@ class Truck(BaseTable):
     track_lifespan = db.Column(db.Integer,default=0, nullable=False)
     crane_lifespan = db.Column(db.Integer,default=0, nullable=False)
 
+class Leave(BaseTable):
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    start_date = db.Column(db.TIMESTAMP, nullable=False)
+    end_date = db.Column(db.TIMESTAMP, nullable=False)
+    reason = db.Column(db.String(150), nullable=False)
+    status = db.Column(db.Integer, default=0, nullable=False)
+    approver = db.Column(db.String(150), default=0, nullable=False)
+    # user = db.relationship('User', backref=db.backref('leaves', lazy=True))
+
 if __name__ == '__main__':
     dotenv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
     if os.path.exists(dotenv_path):

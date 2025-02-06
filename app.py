@@ -7,8 +7,10 @@ from flask import request
 from flask_jwt_extended import (
     JWTManager, create_access_token, jwt_required, get_jwt_identity
 )
+from functools import wraps
 from payload import (
     api_ns, api, app, api_test,
+    leave_payload,
     add_crane_payload,
     general_output_payload,
     register_payload,
@@ -17,7 +19,7 @@ from payload import (
 )
 from flask_bcrypt import Bcrypt
 from flask_restx import Resource
-from models import db, User, Truck
+from models import db, User, Truck, Leave
 from logger import logging
 from util import handle_request_exception
 
@@ -28,12 +30,23 @@ load_dotenv()
 
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("SQL_SERVER")
 app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY')
+app.config['API_KEY']= os.environ.get('API_SECRET_KEY')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False 
 db.init_app(app)
 with app.app_context():
     db.create_all()
     logger.info('DB init done')
 
+def require_api_key(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        auth_header = request.headers.get("Authorization")
+        expected_token = f"Bearer {app.config['API_KEY']}"
+
+        if auth_header != expected_token:
+            return {"error": "Unauthorized"}
+        return f(*args, **kwargs)
+    return decorated_function
 
 # class AuthorizationManager():
 #     def __init__(self):
@@ -50,6 +63,7 @@ class Register(Resource):
     @handle_request_exception
     @api.expect(register_payload)
     @api.marshal_with(general_output_payload)
+    @require_api_key 
     def post(self):
         """
         註冊
@@ -61,8 +75,6 @@ class Register(Resource):
         try:
             if User.query.filter_by(username=username).first():
                 return ({'status':1, 'result': 'Username already exists'}), 400
-            # if User.query.filter_by(email=email).first():
-            #     return ({'status':'1','result': 'Email already exists'}), 400
             new_user = User(username=username, email=email)
             new_user.set_password(password)
             db.session.add(new_user)
@@ -81,6 +93,7 @@ class login(Resource):
     @handle_request_exception
     @api.expect(login_payload)
     @api.marshal_with(general_output_payload)
+    @require_api_key
     def post(self):
         """
         登入
@@ -107,6 +120,7 @@ class ForgotPassword(Resource):
     @handle_request_exception
     @api.expect(forgot_password_payload)
     @api.marshal_with(general_output_payload)
+    @require_api_key 
     def post(self):
         """
         忘記密碼
@@ -126,6 +140,8 @@ class ForgotPassword(Resource):
             return {'status': 1, 'result': 'User not found'}
 
         except Exception as e:
+            # if e.__class__.__name__ == 'RuntimeError:':
+            #     return {'status':1, 'result': 'JWT憑證已經過期，請重新登入'}
             error_class = e.__class__.__name__
             detail = e.args[0]
             logger.warning(f"Forgot PW Error: [{error_class}] detail: {detail}")
@@ -141,12 +157,90 @@ class Test(Resource):
     def get(self):
         user = User.query.get(get_jwt_identity())
         return {'status': 0, 'result': user.username}
+
+
+@api_ns.route('/api/requestleave', methods=['POST'])
+class LeaveRequest(Resource):
+    @handle_request_exception
+    @api.expect(leave_payload)
+    @api.marshal_with(general_output_payload)
+    @jwt_required()
+    def post(self):
+        try:
+            data = api.payload
+            user_id = User.query.get(get_jwt_identity()).id
+            start_date = data.get('start_date')
+            end_date = data.get('end_date')
+            reason = data.get('reason')
+            
+            new_leave_request = Leave(user_id=user_id, start_date=start_date, end_date=end_date, reason=reason)
+            db.session.add(new_leave_request)
+            db.session.commit()
+            return {'status':'0', 'result': '新增成功'}
+        except Exception as e:
+            error_class = e.__class__.__name__
+            detail = e.args[0]
+            logger.warning(f"Add LeaveRequest Error: [{error_class}] detail: {detail}")
+            return {'status':'1', 'result': str(e)}
+        
+@api_ns.route('/api/leavelist', methods=['GET'])
+class LeaveList(Resource):
+    @handle_request_exception
+    @api.marshal_with(general_output_payload)
+    @jwt_required()
+    def get(self):
+        try:
+            leaves = Leave.query.all()
+            result = []
+            for leave in leaves:
+                result.append({
+                    'employee_id': leave.employee_id,
+                    'start_date': leave.start_date,
+                    'end_date': leave.end_date,
+                    'reason': leave.reason
+                })
+            return {'status':'0', 'result': result}
+        except Exception as e:
+            error_class = e.__class__.__name__
+            detail = e.args[0]
+            logger.warning(f"Add Truck Error: [{error_class}] detail: {detail}")
+            return {'status':'1', 'result': str(e)}
     
+@api_ns.route('/api/leaveapprove', methods=['POST'])
+class LeaveApprove(Resource):
+    @handle_request_exception
+    @api.expect()
+    @api.marshal_with(general_output_payload)
+    @jwt_required()
+    def post(self):
+        try:
+            data = api.payload
+            user = User.query.get(get_jwt_identity())
+            employee_id = data.get('employee_id')
+            approve = data.get('approve')
+            leave = Leave.query.filter_by(employee_id=employee_id).first()
+            if not leave:
+                return {'status':'1', 'result': '無請假紀錄'}
+            if user.permission < 1:
+                return {'status':'1', 'result': '權限不足'}
+            
+            
+            leave.status = approve
+            leave.approver = user.username
+
+            db.session.commit()
+            return {'status':'0', 'result': '批准成功'}
+        except Exception as e:
+            error_class = e.__class__.__name__
+            detail = e.args[0]
+            logger.warning(f"Add Truck Error: [{error_class}] detail: {detail}")
+            return {'status':'1', 'result': str(e)}
+        
 @api_ns.route('/api/trucklist', methods=['GET'])
 class TruckList(Resource):
     @handle_request_exception
     @api.marshal_with(general_output_payload)
-    # @jwt_required()
+    @jwt_required()
     def get(self):
         try:
             trucks = Truck.query.all()
@@ -206,4 +300,4 @@ class Addcrane(Resource):
 #     users = db.session.execute(db.select(User).order_by(User.username)).scalars()
 
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=8000, debug=True)

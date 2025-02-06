@@ -2,7 +2,7 @@ from flask import Flask
 from flask_restx import Api, Namespace, Resource, reqparse, fields
 
 app = Flask("app")
-api = Api(app, version='0.0.1', title='奇美OpenAI Automation模擬', doc='/api/doc')
+api = Api(app, version='0.0.1', title='HsinyuOS API規格', doc='/api/doc')
 api_ns = Namespace("HsinyuOS", "all right reserve", path="/")
 api_test = Namespace("test", "Test API Here", path="/")
 
@@ -16,6 +16,15 @@ register_payload = api_ns.model(
         "username": fields.String(required=True, default="Smitlea"),
         "email": fields.String(required=True, default="a@gmail.com"),
         "password": fields.String(required=True, default="123"),
+    },
+)
+leave_payload = api_ns.model(
+    "請假輸入",
+    {
+        "user_id": fields.Integer(required=True, default=1),
+        "start_date": fields.String(required=True, default="2021-01-01 00:00:00"),
+        "end_date": fields.String(required=True, default="2021-01-01 00:00:00"),
+        "reason": fields.String(required=True, default=""),
     },
 )
 

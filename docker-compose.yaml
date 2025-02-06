@@ -6,10 +6,10 @@ services:
     container_name: mariadb-container
     restart: always
     environment:
-      MYSQL_ROOT_PASSWORD: $MYSQL_ROOT_PASSWORD
-      MYSQL_DATABASE: $MYSQL_DATABASE
-      MYSQL_USER: $MYSQL_USER
-      MYSQL_PASSWORD: $MYSQL_PASSWORD
+      MYSQL_ROOT_PASSWORD: 1234
+      MYSQL_DATABASE: HsinyuOS
+      MYSQL_USER: smitlea
+      MYSQL_PASSWORD: 1234
     volumes:
       - mariadb_data:/var/lib/mysql
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
