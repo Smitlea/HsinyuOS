@@ -4,3 +4,4 @@ docker-compose.yaml
 ngrok.exe
 alembic.ini
 migrations/
+nginx/

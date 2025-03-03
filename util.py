@@ -1,7 +1,11 @@
+import os
+
+from http import HTTPStatus
 from functools import wraps
 from flask_restx import abort
-from http import HTTPStatus
 from werkzeug.exceptions import BadRequest
+from flask import request
+
 from logger import logging
 
 logger = logging.getLogger(__file__)
@@ -32,3 +36,15 @@ def handle_request_exception(func):
             )
 
     return wrapper
+
+
+def require_api_key(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        auth_header = request.headers.get("Authorization")
+        expected_token = f"Bearer {os.environ.get('API_SECRET_KEY')}"
+
+        if auth_header != expected_token:
+            return {"error": "Unauthorized"}
+        return f(*args, **kwargs)
+    return decorated_function

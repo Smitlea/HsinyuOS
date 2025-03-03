@@ -1,17 +1,16 @@
 import os
 import random
 import string
+from datetime import timedelta
 
 from dotenv import load_dotenv
-from flask import request
 from flask_jwt_extended import (
-    JWTManager, create_access_token, jwt_required, get_jwt_identity
+    JWTManager, create_access_token, jwt_required, get_jwt_identity, create_refresh_token
 )
-from functools import wraps
 from payload import (
-    api_ns, api, app, api_test,
-    leave_payload,
-    add_crane_payload,
+    api_ns, api, app,
+    refresh_input_payload,
+    login_output_payload,
     general_output_payload,
     register_payload,
     forgot_password_payload,
@@ -19,17 +18,22 @@ from payload import (
 )
 from flask_bcrypt import Bcrypt
 from flask_restx import Resource
-from models import db, User, Truck, Leave
+
+from vehicle import *
+from models import db, User
 from logger import logging
 from util import handle_request_exception
 
 bcrypt = Bcrypt()
 logger = logging.getLogger(__file__)
 jwt = JWTManager(app)
+
 load_dotenv()
 
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("SQL_SERVER")
 app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY')
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(minutes=10)
+app.config["JWT_REFRESH_TOKEN_EXPIRES"] = timedelta(days=30) 
 app.config['API_KEY']= os.environ.get('API_SECRET_KEY')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False 
 db.init_app(app)
@@ -37,16 +41,6 @@ with app.app_context():
     db.create_all()
     logger.info('DB init done')
 
-def require_api_key(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        auth_header = request.headers.get("Authorization")
-        expected_token = f"Bearer {app.config['API_KEY']}"
-
-        if auth_header != expected_token:
-            return {"error": "Unauthorized"}
-        return f(*args, **kwargs)
-    return decorated_function
 
 # class AuthorizationManager():
 #     def __init__(self):
@@ -63,7 +57,6 @@ class Register(Resource):
     @handle_request_exception
     @api.expect(register_payload)
     @api.marshal_with(general_output_payload)
-    @require_api_key 
     def post(self):
         """
         註冊
@@ -92,8 +85,7 @@ class Register(Resource):
 class login(Resource):
     @handle_request_exception
     @api.expect(login_payload)
-    @api.marshal_with(general_output_payload)
-    @require_api_key
+    @api.marshal_with(login_output_payload)
     def post(self):
         """
         登入
@@ -105,8 +97,10 @@ class login(Resource):
 
             user = User.query.filter_by(username=username).first()
             if user and user.check_password(password):
-                access_token = create_access_token(identity=str(user.id))
-                return ({'status':0, 'result': access_token}), 200
+                access_token = create_access_token(identity=str(user.id), expires_delta=timedelta(minutes=30))
+                refresh_token = create_refresh_token(identity=username)
+
+                return ({'status':0, 'result': access_token, 'refresh_token': refresh_token})
 
             return {'status':1, 'result': '密碼或使用者名稱不相符'}
         except Exception as e:
@@ -120,7 +114,6 @@ class ForgotPassword(Resource):
     @handle_request_exception
     @api.expect(forgot_password_payload)
     @api.marshal_with(general_output_payload)
-    @require_api_key 
     def post(self):
         """
         忘記密碼
@@ -148,7 +141,6 @@ class ForgotPassword(Resource):
             return {'status': 1, 'result': str(e), "error": detail}
 
 
-
 @api_ns.route('/api/auth', methods=['GET'])
 class Test(Resource):
     @api.doc(params={'jwt': ''})
@@ -158,141 +150,18 @@ class Test(Resource):
         user = User.query.get(get_jwt_identity())
         return {'status': 0, 'result': user.username}
 
-
-@api_ns.route('/api/requestleave', methods=['POST'])
-class LeaveRequest(Resource):
+@api_ns.route("/refresh", methods=["POST"])
+class Refresh(Resource):
     @handle_request_exception
-    @api.expect(leave_payload)
+    @api.expect(refresh_input_payload)
     @api.marshal_with(general_output_payload)
-    @jwt_required()
+    @jwt_required(refresh=True)
     def post(self):
-        try:
-            data = api.payload
-            user_id = User.query.get(get_jwt_identity()).id
-            start_date = data.get('start_date')
-            end_date = data.get('end_date')
-            reason = data.get('reason')
-            
-            new_leave_request = Leave(user_id=user_id, start_date=start_date, end_date=end_date, reason=reason)
-            db.session.add(new_leave_request)
-            db.session.commit()
-            return {'status':'0', 'result': '新增成功'}
-        except Exception as e:
-            error_class = e.__class__.__name__
-            detail = e.args[0]
-            logger.warning(f"Add LeaveRequest Error: [{error_class}] detail: {detail}")
-            return {'status':'1', 'result': str(e)}
-        
-@api_ns.route('/api/leavelist', methods=['GET'])
-class LeaveList(Resource):
-    @handle_request_exception
-    @api.marshal_with(general_output_payload)
-    @jwt_required()
-    def get(self):
-        try:
-            leaves = Leave.query.all()
-            result = []
-            for leave in leaves:
-                result.append({
-                    'employee_id': leave.employee_id,
-                    'start_date': leave.start_date,
-                    'end_date': leave.end_date,
-                    'reason': leave.reason
-                })
-            return {'status':'0', 'result': result}
-        except Exception as e:
-            error_class = e.__class__.__name__
-            detail = e.args[0]
-            logger.warning(f"Add Truck Error: [{error_class}] detail: {detail}")
-            return {'status':'1', 'result': str(e)}
-    
-@api_ns.route('/api/leaveapprove', methods=['POST'])
-class LeaveApprove(Resource):
-    @handle_request_exception
-    @api.expect()
-    @api.marshal_with(general_output_payload)
-    @jwt_required()
-    def post(self):
-        try:
-            data = api.payload
-            user = User.query.get(get_jwt_identity())
-            employee_id = data.get('employee_id')
-            approve = data.get('approve')
-            leave = Leave.query.filter_by(employee_id=employee_id).first()
-            if not leave:
-                return {'status':'1', 'result': '無請假紀錄'}
-            if user.permission < 1:
-                return {'status':'1', 'result': '權限不足'}
-            
-            
-            leave.status = approve
-            leave.approver = user.username
+        current_user = get_jwt_identity()
+        new_access_token = create_access_token(identity=current_user)
+        return jsonify(access_token=new_access_token)
 
-            db.session.commit()
-            return {'status':'0', 'result': '批准成功'}
-        except Exception as e:
-            error_class = e.__class__.__name__
-            detail = e.args[0]
-            logger.warning(f"Add Truck Error: [{error_class}] detail: {detail}")
-            return {'status':'1', 'result': str(e)}
-        
-@api_ns.route('/api/trucklist', methods=['GET'])
-class TruckList(Resource):
-    @handle_request_exception
-    @api.marshal_with(general_output_payload)
-    @jwt_required()
-    def get(self):
-        try:
-            trucks = Truck.query.all()
-            result = []
-            for truck in trucks:
-                result.append({
-                    'name': truck.name,
-                    'model': truck.model,
-                    'number': truck.number,
-                    'track_lifespan': truck.track_lifespan,
-                    'crane_lifespan': truck.crane_lifespan
-                })
-            return {'status':'0', 'result': result}
-        except Exception as e:
-            error_class = e.__class__.__name__
-            detail = e.args[0]
-            logger.warning(f"Add Truck Error: [{error_class}] detail: {detail}")
-            return {'status':'1', 'result': str(e)}
 
-@api_ns.route('/api/addtruck', methods=['POST'])
-class Addcrane(Resource):
-    @handle_request_exception
-    @api.expect(add_crane_payload)
-    @api.marshal_with(general_output_payload)
-    @jwt_required()
-    def post(self):
-        try:
-            data = api.payload
-            name = data.get('name')
-            img = data.get('img')
-            model = data.get('model')
-            number = data.get('number')
-            track_lifespan = data.get('track_lifespan')
-            crane_lifespan = data.get('crane_lifespan')
-
-            if Truck.query.filter_by(name=name).first():
-                return {'status':'1', 'result': 'Truck already exists'}
-            
-            user = User.query.get(get_jwt_identity())
-
-            if user.permission < 0:
-                return {'status':'1', 'result': '權限不足'}
-            
-            new_truck = Truck(name=name, img=img, model=model, number=number, track_lifespan=track_lifespan, crane_lifespan=crane_lifespan)
-            db.session.add(new_truck)
-            db.session.commit()
-            return {'status':'0', 'result': '新增成功'}
-        except Exception as e:
-            error_class = e.__class__.__name__
-            detail = e.args[0]
-            logger.warning(f"Add Truck Error: [{error_class}] detail: {detail}")
-            return {'status':'1', 'result': str(e)}
 
    
 # @api_ns.route("/users")
@@ -300,4 +169,4 @@ class Addcrane(Resource):
 #     users = db.session.execute(db.select(User).order_by(User.username)).scalars()
 
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=8000, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=True)

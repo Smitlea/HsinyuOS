@@ -1,14 +1,19 @@
 from flask import Flask
-from flask_restx import Api, Namespace, Resource, reqparse, fields
+from flask_restx import Api, Namespace, fields
 
 app = Flask("app")
-api = Api(app, version='0.0.1', title='HsinyuOS API規格', doc='/api/doc')
+api = Api(app, version='0.0.1', title='奇美模擬Open API', doc='/api/doc')
 api_ns = Namespace("HsinyuOS", "all right reserve", path="/")
-api_test = Namespace("test", "Test API Here", path="/")
+api_test = Namespace("test", "尚未測試完成API", path="/")
+api_crane = Namespace("Crane", "吊車API", path="/")
+
+
 
 api.add_namespace(api_ns)
+api.add_namespace(api_crane)
 api.add_namespace(api_test)
-    
+
+
 
 register_payload = api_ns.model(
     "註冊輸入",
@@ -18,10 +23,10 @@ register_payload = api_ns.model(
         "password": fields.String(required=True, default="123"),
     },
 )
+
 leave_payload = api_ns.model(
     "請假輸入",
     {
-        "user_id": fields.Integer(required=True, default=1),
         "start_date": fields.String(required=True, default="2021-01-01 00:00:00"),
         "end_date": fields.String(required=True, default="2021-01-01 00:00:00"),
         "reason": fields.String(required=True, default=""),
@@ -31,22 +36,110 @@ leave_payload = api_ns.model(
 login_payload = api_ns.model(
     "登入輸入",
     {
-        "username": fields.String(required=True, default="3e4f5e4f-3e4f-3e4f-3e4f-3e4f5e4f5e4f"),
+        "username": fields.String(required=True, default="smitlea"),
         "password": fields.String(required=True, default="123"),
     },
 )
 
-forgot_password_payload = api_ns.model('ForgotPasswordPayload', {
+login_output_payload = api_ns.model(
+    "登入輸出",
+    {
+        "status": fields.Integer(
+            required=True, description="0 for success, 1 for failure", default=1
+        ),
+        "result": fields.String(required=True, default="1"),
+        'refresh_token': fields.String(required=False, description='Refresh token'),
+        'error': fields.String(required=False, default=""),
+    },
+)
+
+refresh_input_payload = api_ns.model(
+    "刷新JWT輸入",
+    {
+        "refresh_token": fields.String(required=True, description="Refresh token"),
+    },
+)
+
+forgot_password_payload = api_ns.model('忘記密碼輸入', {
     'email': fields.String(required=True, description='User email for password reset')
 })
 
-add_crane_payload = api_ns.model('AddTruck', {
-        'name': fields.String(required=True, description='代號'),
-        'img': fields.String(required=True, description='圖片'),
-        'model': fields.String(required=True, description='車型'),
-        'number': fields.String(required=True, description='車號'),
-        'track_lifespan': fields.Integer(required=True, description='履帶壽命'),
-        'crane_lifespan': fields.Integer(required=True, description='吊車壽命')
+add_usage_payload = api_ns.model(
+    '新增使用紀錄輸入',
+    {
+        'usage_date': fields.String(
+            required=False,
+            description='使用日期 (YYYY-MM-DD)，不填則預設為今日',
+            default='2025-03-03'
+        ),
+        'daily_hours': fields.Integer(
+            required=False,
+            description='當日使用小時 (預設 8)',
+            default=8
+        ),
+    }
+)
+
+# 新增注意事項
+add_notice_payload = api_ns.model(
+    '新增注意事項輸入',
+    {
+        'notice_date': fields.String(
+            required=False,
+            description='注意事項日期 (YYYY-MM-DD)，不填則預設為今日',
+            default='2025-03-03'
+        ),
+        'status': fields.String(
+            required=True,
+            description='注意事項狀態 (待修/異常/現場)',
+            default='待修'
+        ),
+        'title': fields.String(
+            required=True,
+            description='注意事項大綱',
+            default='吊臂異常'
+        ),
+        'description': fields.String(
+            required=False,
+            description='注意事項的詳細描述',
+            default='檢查到吊臂有異常聲音，需要技師檢修。'
+        ),
+    }
+)
+
+# 新增維修記錄
+add_maintenance_payload = api_ns.model(
+    '新增維修記錄輸入',
+    {
+        'maintenance_date': fields.String(
+            required=False,
+            description='維修日期 (YYYY-MM-DD)，不填則預設為今日',
+            default='2025-03-03'
+        ),
+        'field1': fields.String(
+            required=False,
+            description='維修欄位1，示例: 更換液壓油',
+            default='更換液壓油'
+        ),
+        'field2': fields.String(
+            required=False,
+            description='維修欄位2，示例: 技師姓名、負責人等',
+            default='技師王小明'
+        ),
+        'field3': fields.String(
+            required=False,
+            description='維修欄位3，示例: 其他備註',
+            default='需追蹤檢測'
+        ),
+    }
+)
+
+add_crane_payload = api_ns.model('新增吊車輸入', {
+        'crane_number': fields.String(required=True, description='代號', default="ABC-123"),
+        'crane_type': fields.String(required=True, description='圖片', default="輪式"),
+        'initial_hours': fields.String(required=True, description='初始小時', default=100),
+        'location': fields.String(required=True, description='地點', default='台中港'),
+        'photo_url': fields.Integer(required=False, description='照片'),
 })
 
 general_output_payload = api_ns.model(
