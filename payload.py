@@ -2,15 +2,17 @@ from flask import Flask
 from flask_restx import Api, Namespace, fields
 
 app = Flask("app")
-api = Api(app, version='0.0.1', title='奇美模擬Open API', doc='/api/doc')
+api = Api(app, version='0.0.1', title='HsinyuOS Open API', doc='/api/doc')
 api_ns = Namespace("HsinyuOS", "all right reserve", path="/")
 api_test = Namespace("test", "尚未測試完成API", path="/")
+api_notice = Namespace("Notice", "注意事項API", path="/")
 api_crane = Namespace("Crane", "吊車API", path="/")
 
 
 
 api.add_namespace(api_ns)
 api.add_namespace(api_crane)
+api.add_namespace(api_notice)
 api.add_namespace(api_test)
 
 

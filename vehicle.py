@@ -1,11 +1,10 @@
 import datetime
 import pytz
 
-from flask import jsonify
 from flask_restx import Resource
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from models import db, Crane, User, CraneUsage, CraneNotice, CraneMaintenance
-from payload import api_ns, api_crane, api_test, add_crane_payload, general_output_payload, add_usage_payload, add_notice_payload, add_maintenance_payload
+from payload import api_ns, api_crane, api_test, api_notice, add_crane_payload, general_output_payload, add_usage_payload, add_notice_payload, add_maintenance_payload
 from util import handle_request_exception
 from logger import logging
 
@@ -40,12 +39,12 @@ class Create_crane(Resource):
                     "total_usage_hours": total_usage,
                     "alert": alert  
                 })
-            return jsonify({"status":'0', "result":result}), 200
+            return {"status": "0", "result": result}, 200
         except Exception as e:
             error_class = e.__class__.__name__
             detail = e.args[0]
             logger.warning(f"Get Crane Error: [{error_class}] detail: {detail}")
-            return jsonify({"status":"1", "result":error_class, "error": e.args}), 400
+            return {'status': 1, 'result': error_class, "error": e.args}, 400
         
     @api.expect(add_crane_payload)
     @api.marshal_with(general_output_payload)
@@ -77,12 +76,12 @@ class Create_crane(Resource):
 
             db.session.add(new_crane)
             db.session.commit()
-            return jsonify({"status":'0',"result": "Crane created successfully"}), 201
+            return {"status": '0', "result": "Crane created successfully"}, 201
         except Exception as e:
             error_class = e.__class__.__name__
             detail = e.args[0]
             logger.warning(f"Add Crane Error: [{error_class}] detail: {detail}")
-            return jsonify({"status":"1","result":error_class, "error": e.args}), 400
+            return {'status': 1, 'result': error_class, "error": e.args}, 400
         
 
 
@@ -109,30 +108,35 @@ class Crane_detail(Resource):
                 "total_usage_hours": total_usage,
                 "alert": alert
             }
-            return jsonify({"status":'0', "result":data}), 200
+            return {"status": '0', "result": data}, 200
         except Exception as e:
             error_class = e.__class__.__name__
             detail = e.args[0]
             logger.warning(f"Get Crane Detail Error: [{error_class}] detail: {detail}")
-            return jsonify({"status":"1", "result":error_class, "error": e.args}), 400
+            return {"status": "1", "result": error_class, "error": e.args}, 400
         
     @handle_request_exception
     @jwt_required()
     @api.expect(add_crane_payload)
     @api.marshal_with(general_output_payload)
     def put(self, crane_id):
-        crane = Crane.query.get_or_404(crane_id)
-        data = api.payload
-        crane.crane_number = data.get('crane_number', crane.crane_number)
-        crane.crane_type = data.get('crane_type', crane.crane_type)
-        crane.location = data.get('location', crane.location)
-        crane.photo_url = data.get('photo_url', crane.photo_url)
-        # 若需要調整初始小時
-        if 'initial_hours' in data:
-            crane.initial_hours = data['initial_hours']
+        try:
+            crane = Crane.query.get_or_404(crane_id)
+            data = api.payload
+            crane.crane_number = data.get('crane_number', crane.crane_number)
+            crane.crane_type = data.get('crane_type', crane.crane_type)
+            crane.location = data.get('location', crane.location)
+            crane.photo_url = data.get('photo_url', crane.photo_url)
+            
+            if 'initial_hours' in data:
+                crane.initial_hours = data['initial_hours']
 
-        db.session.commit()
-        return jsonify({"status":'0', "result": "Crane updated successfully."}), 200
+            db.session.commit()
+            return {"status": '0', "result": "Crane updated successfully."}, 200
+        except Exception as e:
+            error_class = e.__class__.__name__
+            return {"status": "1", "result": error_class, "error": e.args}, 400
+
         
 
 # ------------------------------
@@ -161,13 +165,13 @@ class Create_usage(Resource):
                     "usage_date": u.usage_date.isoformat(),
                     "daily_hours": u.daily_hours,
                 })
-            return jsonify({"status": "0", "result": result}), 200
+            return {"status": "0", "result": result}, 200
 
         except Exception as e:
             error_class = e.__class__.__name__
             detail = e.args[0]
             logger.warning(f"Get Usage Error: [{error_class}] detail: {detail}")
-            return jsonify({"status": "1", "result": error_class, "error": e.args}), 400
+            return {"status": "1", "result": error_class, "error": e.args}, 400
 
     @handle_request_exception
     @jwt_required()
@@ -201,13 +205,13 @@ class Create_usage(Resource):
 
             db.session.add(new_usage)
             db.session.commit()
-            return jsonify({"status": "0", "result": "Usage record created."}), 201
+            return {"status": "0", "result": "Usage record created."}, 201
 
         except Exception as e:
             error_class = e.__class__.__name__
             detail = e.args[0]
             logger.warning(f"Add Usage Error: [{error_class}] detail: {detail}")
-            return jsonify({"status": "1", "result": error_class, "error": e.args}), 400
+            return {"status": "1", "result": error_class, "error": e.args}, 400
 
 
 @api_test.route('/api/usages/<int:usage_id>', methods=['GET', 'PUT', 'DELETE'])
@@ -230,13 +234,13 @@ class Usage(Resource):
                 "usage_date": usage.usage_date.isoformat(),
                 "daily_hours": usage.daily_hours
             }
-            return jsonify({"status": "0", "result": data}), 200
+            return {"status": "0", "result": data}, 200
 
         except Exception as e:
             error_class = e.__class__.__name__
             detail = e.args[0]
             logger.warning(f"Get Usage Detail Error: [{error_class}] detail: {detail}")
-            return jsonify({"status": "1", "result": error_class, "error": e.args}), 400
+            return {"status": "1", "result": error_class, "error": e.args}, 400
 
     @handle_request_exception
     @jwt_required()
@@ -255,13 +259,13 @@ class Usage(Resource):
                 usage.daily_hours = data['daily_hours']
 
             db.session.commit()
-            return jsonify({"status": "0", "result": "Usage record updated."}), 200
+            return {"status": "0", "result": "Usage record updated."}, 200
 
         except Exception as e:
             error_class = e.__class__.__name__
             detail = e.args[0]
             logger.warning(f"Update Usage Error: [{error_class}] detail: {detail}")
-            return jsonify({"status": "1", "result": error_class, "error": e.args}), 400
+            return {"status": "1", "result": error_class, "error": e.args}, 400
 
     @handle_request_exception
     @jwt_required()
@@ -273,19 +277,19 @@ class Usage(Resource):
             usage = CraneUsage.query.get_or_404(usage_id)
             db.session.delete(usage)
             db.session.commit()
-            return jsonify({"status": "0", "result": "Usage record deleted."}), 200
+            return {"status": "0", "result": "Usage record deleted."}, 200
 
         except Exception as e:
             error_class = e.__class__.__name__
             detail = e.args[0]
             logger.warning(f"Delete Usage Error: [{error_class}] detail: {detail}")
-            return jsonify({"status": "1", "result": error_class, "error": e.args}), 400
+            return {"status": "1", "result": error_class, "error": e.args}, 400
 
 
 # ------------------------------
 #  Notice (CraneNotice) 相關 API
 # ------------------------------
-@api_test.route('/api/cranes/<int:crane_id>/notices', methods=['GET', 'POST'])
+@api_notice.route('/api/cranes/<int:crane_id>/notices', methods=['GET', 'POST'])
 class Create_notice(Resource):
     """
     GET: 取得某台吊車的所有注意事項
@@ -309,13 +313,13 @@ class Create_notice(Resource):
                     "title": n.title,
                     "description": n.description
                 })
-            return jsonify({"status": "0", "result": result}), 200
+            return {"status": "0", "result": result}, 200
 
         except Exception as e:
             error_class = e.__class__.__name__
             detail = e.args[0]
             logger.warning(f"Get Notices Error: [{error_class}] detail: {detail}")
-            return jsonify({"status": "1", "result": error_class, "error": e.args}), 400
+            return {"status": "1", "result": error_class, "error": e.args}, 400
 
     @handle_request_exception
     @jwt_required()
@@ -339,7 +343,7 @@ class Create_notice(Resource):
             if not notice_date:
                 notice_date = datetime.datetime.now(tz).date()
             else:
-                notice_date = datetime.strptime(notice_date, "%Y-%m-%d").date()
+                notice_date = datetime.datetime.strptime(notice_date, "%Y-%m-%d").date()
 
             new_notice = CraneNotice(
                 crane_id=crane_id,
@@ -350,16 +354,16 @@ class Create_notice(Resource):
             )
             db.session.add(new_notice)
             db.session.commit()
-            return jsonify({"status": "0", "result": "Crane notice created."}), 201
+            return {"status": "0", "result": "Crane notice created."}, 201
 
         except Exception as e:
             error_class = e.__class__.__name__
             detail = e.args[0]
             logger.warning(f"Add Notice Error: [{error_class}] detail: {detail}")
-            return jsonify({"status": "1", "result": error_class, "error": e.args}), 400
+            return {"status": "1", "result": error_class, "error": e.args}, 400
 
 
-@api_test.route('/api/notices/<int:notice_id>', methods=['GET', 'PUT', 'DELETE'])
+@api_notice.route('/api/notices/<int:notice_id>', methods=['GET', 'PUT', 'DELETE'])
 class Notice(Resource):
     """
     針對單筆 Notice 的 查詢 / 更新 / 刪除
@@ -381,13 +385,13 @@ class Notice(Resource):
                 "title": notice.title,
                 "description": notice.description
             }
-            return jsonify({"status": "0", "result": data}), 200
+            return {"status": "0", "result": data}, 200
 
         except Exception as e:
             error_class = e.__class__.__name__
             detail = e.args[0]
             logger.warning(f"Get Notice Detail Error: [{error_class}] detail: {detail}")
-            return jsonify({"status": "1", "result": error_class, "error": e.args}), 400
+            return {"status": "1", "result": error_class, "error": e.args}, 400
 
     @handle_request_exception
     @jwt_required()
@@ -411,13 +415,13 @@ class Notice(Resource):
                 notice.description = data['description']
 
             db.session.commit()
-            return jsonify({"status": "0", "result": "Crane notice updated."}), 200
+            return {"status": "0", "result": "Crane notice updated."}, 200
 
         except Exception as e:
             error_class = e.__class__.__name__
             detail = e.args[0]
             logger.warning(f"Update Notice Error: [{error_class}] detail: {detail}")
-            return jsonify({"status": "1", "result": error_class, "error": e.args}), 400
+            return {"status": "1", "result": error_class, "error": e.args}, 400
 
     @handle_request_exception
     @jwt_required()
@@ -429,13 +433,13 @@ class Notice(Resource):
             notice = CraneNotice.query.get_or_404(notice_id)
             db.session.delete(notice)
             db.session.commit()
-            return jsonify({"status": "0", "result": "Crane notice deleted."}), 200
+            return {"status": "0", "result": "Crane notice deleted."}, 200
 
         except Exception as e:
             error_class = e.__class__.__name__
             detail = e.args[0]
             logger.warning(f"Delete Notice Error: [{error_class}] detail: {detail}")
-            return jsonify({"status": "1", "result": error_class, "error": e.args}), 400
+            return {"status": "1", "result": error_class, "error": e.args}, 400
 
 
 # -----------------------------------
@@ -465,13 +469,13 @@ class Create_maintenance(Resource):
                     "field2": m.field2,
                     "field3": m.field3
                 })
-            return jsonify({"status": "0", "result": result}), 200
+            return {"status": "0", "result": result}, 200
 
         except Exception as e:
             error_class = e.__class__.__name__
             detail = e.args[0]
             logger.warning(f"Get Maintenance Error: [{error_class}] detail: {detail}")
-            return jsonify({"status": "1", "result": error_class, "error": e.args}), 400
+            return {"status": "1", "result": error_class, "error": e.args}, 400
 
     @handle_request_exception
     @jwt_required()
@@ -507,13 +511,13 @@ class Create_maintenance(Resource):
             db.session.add(new_maintenance)
             db.session.commit()
 
-            return jsonify({"status": "0", "result": "Crane maintenance record created."}), 201
+            return {"status": "0", "result": "Crane maintenance record created."}, 201
 
         except Exception as e:
             error_class = e.__class__.__name__
             detail = e.args[0]
             logger.warning(f"Add Maintenance Error: [{error_class}] detail: {detail}")
-            return jsonify({"status": "1", "result": error_class, "error": e.args}), 400
+            return {"status": "1", "result": error_class, "error": e.args}, 400
 
 
 @api_test.route('/api/maintenances/<int:maintenance_id>', methods=['GET', 'PUT', 'DELETE'])
@@ -538,13 +542,13 @@ class Maintenance(Resource):
                 "field2": m.field2,
                 "field3": m.field3
             }
-            return jsonify({"status": "0", "result": data}), 200
+            return {"status": "0", "result": data}, 200
 
         except Exception as e:
             error_class = e.__class__.__name__
             detail = e.args[0]
             logger.warning(f"Get Maintenance Detail Error: [{error_class}] detail: {detail}")
-            return jsonify({"status": "1", "result": error_class, "error": e.args}), 400
+            return {"status": "1", "result": error_class, "error": e.args}, 400
 
     @handle_request_exception
     @jwt_required()
@@ -568,13 +572,13 @@ class Maintenance(Resource):
                 m.field3 = data['field3']
 
             db.session.commit()
-            return jsonify({"status": "0", "result": "Crane maintenance record updated."}), 200
+            return {"status": "0", "result": "Crane maintenance record updated."}, 200
 
         except Exception as e:
             error_class = e.__class__.__name__
             detail = e.args[0]
             logger.warning(f"Update Maintenance Error: [{error_class}] detail: {detail}")
-            return jsonify({"status": "1", "result": error_class, "error": e.args}), 400
+            return {"status": "1", "result": error_class, "error": e.args}, 400
 
     @handle_request_exception
     @jwt_required()
@@ -586,13 +590,13 @@ class Maintenance(Resource):
             m = CraneMaintenance.query.get_or_404(maintenance_id)
             db.session.delete(m)
             db.session.commit()
-            return jsonify({"status": "0", "result": "Crane maintenance record deleted."}), 200
+            return{"status": "0", "result": "Crane maintenance record deleted."}, 200
 
         except Exception as e:
             error_class = e.__class__.__name__
             detail = e.args[0]
             logger.warning(f"Delete Maintenance Error: [{error_class}] detail: {detail}")
-            return jsonify({"status": "1", "result": error_class, "error": e.args}), 400
+            return {"status": "1", "result": error_class, "error": e.args}, 400
 
 
         

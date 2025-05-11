@@ -97,7 +97,7 @@ class login(Resource):
 
             user = User.query.filter_by(username=username).first()
             if user and user.check_password(password):
-                access_token = create_access_token(identity=str(user.id), expires_delta=timedelta(minutes=30))
+                access_token = create_access_token(identity=str(user.id), expires_delta=timedelta(minutes=60))
                 refresh_token = create_refresh_token(identity=username)
 
                 return ({'status':0, 'result': access_token, 'refresh_token': refresh_token})
@@ -159,7 +159,7 @@ class Refresh(Resource):
     def post(self):
         current_user = get_jwt_identity()
         new_access_token = create_access_token(identity=current_user)
-        return jsonify(access_token=new_access_token)
+        return {"access_token":new_access_token}
 
 
 
