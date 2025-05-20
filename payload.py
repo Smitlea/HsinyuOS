@@ -141,7 +141,7 @@ add_crane_payload = api_ns.model('新增吊車輸入', {
         'crane_type': fields.String(required=True, description='圖片', default="輪式"),
         'initial_hours': fields.String(required=True, description='初始小時', default=100),
         'location': fields.String(required=True, description='地點', default='台中港'),
-        'photo_url': fields.Integer(required=False, description='照片'),
+        'photo': fields.Integer(required=False, description='照片'),
 })
 
 general_output_payload = api_ns.model(
@@ -154,3 +154,58 @@ general_output_payload = api_ns.model(
         "error": fields.String(required=False, default=""),
     },
 )
+
+site_input_payload = api_ns.model(
+    "工地輸入",
+    {
+        "vendor":   fields.String(required=True,  example="大林營造"),
+        "location": fields.String(required=True,  example="台北市中山區民權東路"),
+        'coordinates': fields.String(required=False, example="25.0478,121.5171"),
+        "photo":    fields.String(required=False, example="<base64 string>"),
+    },
+)
+
+site_output_payload = api_ns.model(
+    "工地輸出",
+    {
+        "status": fields.Integer(
+            required=True,
+            description="0 for success, 1 for failure",
+            default=1
+        ),
+        "result": fields.Nested(
+            api_ns.model(
+                "工地輸出內容",
+                {
+                    "id": fields.String(required=True, example="123456"),
+                    "vendor": fields.String(required=True, example="大林營造"),
+                    "location": fields.String(required=True, example="台北市中山區民權東路"),
+                    "latitude": fields.Float,     
+                    "longitude": fields.Float,   
+                    "created_at": fields.String(required=True, example="2023-10-01 12:00:00"),
+                },
+            )
+        )
+    }
+)
+site_item_payload = api_ns.model(
+    "工地",
+    {
+        "id":         fields.String,
+        "vendor":     fields.String,
+        "location":   fields.String,
+        "latitude": fields.Float,     
+        "longitude": fields.Float,   
+        "created_at": fields.String,
+    },
+)
+
+site_list_output = api_ns.model(
+    "工地列表輸出",
+    {
+        "status": fields.Integer(example=1),
+        "result": fields.List(fields.Nested(site_item_payload)),
+    },
+)
+
+

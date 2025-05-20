@@ -16,11 +16,13 @@ def handle_request_exception(func):
         try:
             return func(*args, **kwargs)
         except BadRequest as bad_request:
-            logger.error("Bad Request: %s", bad_request.data)
+            # 改用 str(bad_request)，避免 .data 屬性不存在
+            error_message = str(bad_request)
+            logger.error("Bad Request: %s", error_message)
             return abort(
                 HTTPStatus.BAD_REQUEST,
-                "",
-                error=bad_request.data,
+                message="Bad Request",
+                error=error_message,
                 status=1,
                 result=None,
             )
@@ -29,14 +31,13 @@ def handle_request_exception(func):
             logger.error("An error occurred: %s", error_message)
             return abort(
                 HTTPStatus.INTERNAL_SERVER_ERROR,
-                "",
+                message="Internal Server Error",
                 error=error_message,
                 status=1,
                 result=None,
             )
 
     return wrapper
-
 
 def require_api_key(f):
     @wraps(f)

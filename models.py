@@ -2,18 +2,20 @@ import os
 import datetime
 import pytz
 
+from uuid import uuid4
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
-
+from sqlalchemy.dialects.mysql import LONGTEXT
 from flask_sqlalchemy import SQLAlchemy
 from flask_bcrypt import Bcrypt
 
 
 bcrypt = Bcrypt()
 db = SQLAlchemy()
+Base = declarative_base()
 tz = pytz.timezone('Asia/Taipei')
 
 class BaseTable(db.Model):
@@ -21,6 +23,8 @@ class BaseTable(db.Model):
     __table_args__ = {"mysql_charset": "utf8mb4"}
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     timestamp = db.Column(db.TIMESTAMP, default=datetime.datetime.now(tz), nullable=False)
+    created_at   = db.Column(db.DateTime, default=datetime.datetime.now(tz))
+    updated_at   = db.Column(db.DateTime, default=datetime.datetime.now(tz), onupdate=datetime.datetime.now)
 
 class User(BaseTable):
     username = db.Column(db.String(150), unique=True, nullable=False)
@@ -56,8 +60,7 @@ class Crane(BaseTable):
     initial_hours = db.Column(db.Integer, nullable=False, default=100, comment="初始小時數，預設100")
     # 您也可以依需求將累計使用小時放在同一張表內再搭配計算，這裡留給 daily usage 紀錄彈性
     location = db.Column(db.String(255), nullable=True, comment="地理位置描述")
-    photo_url = db.Column(db.String(255), nullable=True, comment="照片URL(或檔名)")
-    created_at = db.Column(db.DateTime, default=datetime.datetime.now(tz), comment="建立時間")
+    photo = db.Column(db.String(255), nullable=True, comment="照片URL(或檔名)")
 
     def __repr__(self):
         return f"<Crane {self.crane_number} ({self.crane_type})>"
@@ -73,12 +76,12 @@ class CraneUsage(BaseTable):
     usage_date = db.Column(db.Date, nullable=False, comment="使用日期")
     daily_hours = db.Column(db.Integer, nullable=False, default=8, comment="當日使用小時(預設8)")
 
+
     # 多對一關係：一台吊車對多筆使用紀錄
     crane = db.relationship("Crane", backref=db.backref("usages", cascade="all, delete-orphan"))
 
     def __repr__(self):
         return f"<CraneUsage crane_id={self.crane_id}, date={self.usage_date}, hours={self.daily_hours}>"
-
 
 class CraneNotice(BaseTable):
     """
@@ -93,11 +96,11 @@ class CraneNotice(BaseTable):
     title = db.Column(db.String(100), nullable=False, comment="注意事項大綱")
     description = db.Column(db.Text, nullable=True, comment="注意事項的詳細描述")
 
+
     crane = db.relationship("Crane", backref=db.backref("notices", cascade="all, delete-orphan"))
 
     def __repr__(self):
         return f"<CraneNotice crane_id={self.crane_id}, date={self.notice_date}, status={self.status}>"
-
 
 class CraneMaintenance(BaseTable):
     """
@@ -111,14 +114,43 @@ class CraneMaintenance(BaseTable):
     field1 = db.Column(db.String(255), nullable=True, comment="自訂欄位1")
     field2 = db.Column(db.String(255), nullable=True, comment="自訂欄位2")
     field3 = db.Column(db.String(255), nullable=True, comment="自訂欄位3")
+    created_by   = db.Column(db.Integer, db.ForeignKey("user.id"))
+    created_at   = db.Column(db.DateTime, default=datetime.datetime.now)
+    updated_at   = db.Column(db.DateTime, default=datetime.datetime.now, onupdate=datetime.datetime.now)
 
     crane = db.relationship("Crane", backref=db.backref("maintenances", cascade="all, delete-orphan"))
 
     def __repr__(self):
         return f"<CraneMaintenance crane_id={self.crane_id}, date={self.maintenance_date}>"
 
+class ConstructionSite(db.Model):
+    __tablename__ = "construction_site"
 
-if __name__ == '__main__':
+    id           = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid4()))
+    vendor       = db.Column(db.String(100), nullable=False)         # 廠商
+    location     = db.Column(db.String(200), nullable=False)         # 位置
+    photo        = db.Column(LONGTEXT, nullable=True)    
+    latitude     = db.Column(db.Float(precision=53), nullable=True)   # double precision
+    longitude    = db.Column(db.Float(precision=53), nullable=True)  # double precision
+    created_by   = db.Column(db.Integer, db.ForeignKey("user.id"))   # 建立者
+    created_at   = db.Column(db.DateTime, default=datetime.datetime.now(tz))
+    updated_at   = db.Column(db.DateTime, default=datetime.datetime.now(tz), onupdate=datetime.datetime.now)
+
+    creator = db.relationship("User", backref="sites")
+    def to_dict(self, include_photo: bool = True):
+        data = {
+            "id": self.id,
+            "vendor": self.vendor,
+            "location": self.location,
+            "latitude": self.latitude,
+            "longitude": self.longitude,
+            "created_at": self.created_at,
+        }
+        if include_photo:
+            data["photo"] = self.photo
+        return data
+
+if __name__ == "__main__":
     dotenv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
     if os.path.exists(dotenv_path):
         load_dotenv(dotenv_path)

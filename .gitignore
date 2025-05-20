@@ -2,6 +2,7 @@
 Pipfile
 docker-compose.yaml
 ngrok.exe
+alembic/
 alembic.ini
 migrations/
 nginx/

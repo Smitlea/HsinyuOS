@@ -20,6 +20,7 @@ from flask_bcrypt import Bcrypt
 from flask_restx import Resource
 
 from vehicle import *
+from location import *
 from models import db, User
 from logger import logging
 from util import handle_request_exception
@@ -28,14 +29,14 @@ bcrypt = Bcrypt()
 logger = logging.getLogger(__file__)
 jwt = JWTManager(app)
 
-load_dotenv()
+load_dotenv(override=True)
 
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("SQL_SERVER")
 app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY')
-app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(minutes=10)
-app.config["JWT_REFRESH_TOKEN_EXPIRES"] = timedelta(days=30) 
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(minutes=60)
+app.config["JWT_REFRESH_TOKEN_EXPIRES"] = timedelta(days=1) 
 app.config['API_KEY']= os.environ.get('API_SECRET_KEY')
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False 
+ 
 db.init_app(app)
 with app.app_context():
     db.create_all()
@@ -67,7 +68,7 @@ class Register(Resource):
         password = data.get('password')
         try:
             if User.query.filter_by(username=username).first():
-                return ({'status':1, 'result': 'Username already exists'}), 400
+                return ({'status':1, 'result': '這個用戶已存在'}), 200
             new_user = User(username=username, email=email)
             new_user.set_password(password)
             db.session.add(new_user)
@@ -79,7 +80,7 @@ class Register(Resource):
             error_class = e.__class__.__name__
             detail = e.args[0]
             logger.warning(f"Register Error: [{error_class}] detail: {detail}")
-            return {'status':1, 'result': error_class, 'error': detail}
+            return {'status':1, 'result': error_class, 'error': detail}, 500
 
 @api_ns.route('/api/login', methods=['POST'])
 class login(Resource):
@@ -141,25 +142,57 @@ class ForgotPassword(Resource):
             return {'status': 1, 'result': str(e), "error": detail}
 
 
-@api_ns.route('/api/auth', methods=['GET'])
+@api_ns.route('/api/test', methods=['GET'])
 class Test(Resource):
+    @handle_request_exception
+    def get(self):
+        return {'status': 0, 'result': "you are connect Houston"}
+
+@api_ns.route('/api/auth', methods=['GET'])
+class Auth(Resource):
     @api.doc(params={'jwt': ''})
     @handle_request_exception
     @jwt_required()
     def get(self):
         user = User.query.get(get_jwt_identity())
+        if not user:
+            return {'status': 1, 'result': '使用者不存在'}
         return {'status': 0, 'result': user.username}
+    
+@api_ns.route('/api/check_permission', methods=['GET'])
+class Check(Resource):
+    @api.doc(params={'jwt': ''})
+    @handle_request_exception
+    @jwt_required()
+    def get(self):
+        user = db.session.get(User, get_jwt_identity())
+        if not user:
+            return {'status': 1, 'result': '使用者不存在'}
+        return {'status': 0, 'result': user.permission}
+    
 
-@api_ns.route("/refresh", methods=["POST"])
+@api_ns.route("/api/refresh", methods=["POST"])
 class Refresh(Resource):
     @handle_request_exception
     @api.expect(refresh_input_payload)
-    @api.marshal_with(general_output_payload)
+    @api.marshal_with(login_output_payload)
     @jwt_required(refresh=True)
     def post(self):
-        current_user = get_jwt_identity()
-        new_access_token = create_access_token(identity=current_user)
-        return {"access_token":new_access_token}
+        try:
+            current_user = get_jwt_identity()
+            print(f"current_user: {current_user}")
+            user = User.query.filter_by(username=current_user).first()
+            if not user:
+                return {'status': 1, 'result': '使用者不存在'}
+            new_access_token = create_access_token(identity=str(user.id), expires_delta=timedelta(minutes=60))
+            new_refresh_token = create_refresh_token(identity=current_user)
+            return {'status': 0, 'result': new_access_token, 'refresh_token': new_refresh_token}
+        except Exception as e:
+            error_class = e.__class__.__name__
+            detail = e.args[0]
+            logger.warning(f"login Error: [{error_class}] detail: {detail}")
+            return {'status':1, 'result': str(e)}
+
 
 
 

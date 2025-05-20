@@ -35,7 +35,7 @@ class Create_crane(Resource):
                     "crane_number": crane.crane_number,
                     "crane_type": crane.crane_type,
                     "location": crane.location,
-                    "photo_url": crane.photo_url,
+                    "photo": crane.photo,
                     "total_usage_hours": total_usage,
                     "alert": alert  
                 })
@@ -56,7 +56,7 @@ class Create_crane(Resource):
             crane_type = data.get('crane_type')
             initial_hours = data.get('initial_hours', 100)
             location = data.get('location')
-            photo_url = data.get('photo_url')
+            photo = data.get('photo')
             
             if Crane.query.filter_by(crane_number=crane_number).first():
                 return {'status':'1', 'result': '拖車已經存在了'}
@@ -71,7 +71,7 @@ class Create_crane(Resource):
                 crane_type=crane_type,
                 initial_hours=initial_hours,
                 location=location,
-                photo_url=photo_url
+                photo=photo
             )
 
             db.session.add(new_crane)
@@ -104,7 +104,7 @@ class Crane_detail(Resource):
                 "crane_number": crane.crane_number,
                 "crane_type": crane.crane_type,
                 "location": crane.location,
-                "photo_url": crane.photo_url,
+                "photo": crane.photo,
                 "total_usage_hours": total_usage,
                 "alert": alert
             }
@@ -126,7 +126,7 @@ class Crane_detail(Resource):
             crane.crane_number = data.get('crane_number', crane.crane_number)
             crane.crane_type = data.get('crane_type', crane.crane_type)
             crane.location = data.get('location', crane.location)
-            crane.photo_url = data.get('photo_url', crane.photo_url)
+            crane.photo = data.get('photo', crane.photo)
             
             if 'initial_hours' in data:
                 crane.initial_hours = data['initial_hours']
@@ -195,7 +195,7 @@ class Create_usage(Resource):
             if not usage_date:
                 usage_date = datetime.datetime.now(tz).date()
             else:
-                usage_date = datetime.strptime(usage_date, "%Y-%m-%d").date()
+                usage_date = datetime.datetime.strptime(usage_date, "%Y-%m-%d").date()
 
             new_usage = CraneUsage(
                 crane_id=crane_id,
@@ -254,7 +254,7 @@ class Usage(Resource):
             usage = CraneUsage.query.get_or_404(usage_id)
             data = api_ns.payload
             if 'usage_date' in data and data['usage_date']:
-                usage.usage_date = datetime.strptime(data['usage_date'], "%Y-%m-%d").date()
+                usage.usage_date = datetime.datetime.strptime(data['usage_date'], "%Y-%m-%d").date()
             if 'daily_hours' in data:
                 usage.daily_hours = data['daily_hours']
 
@@ -406,7 +406,7 @@ class Notice(Resource):
             data = api_ns.payload
 
             if 'notice_date' in data and data['notice_date']:
-                notice.notice_date = datetime.strptime(data['notice_date'], "%Y-%m-%d").date()
+                notice.notice_date = datetime.datetime.strptime(data['notice_date'], "%Y-%m-%d").date()
             if 'status' in data:
                 notice.status = data['status']
             if 'title' in data:
@@ -499,7 +499,7 @@ class Create_maintenance(Resource):
             if not maintenance_date:
                 maintenance_date = datetime.datetime.now(tz).date()
             else:
-                maintenance_date = datetime.strptime(maintenance_date, "%Y-%m-%d").date()
+                maintenance_date = datetime.datetime.strptime(maintenance_date, "%Y-%m-%d").date()
 
             new_maintenance = CraneMaintenance(
                 crane_id=crane_id,
@@ -563,7 +563,7 @@ class Maintenance(Resource):
             data = api_ns.payload
 
             if 'maintenance_date' in data and data['maintenance_date']:
-                m.maintenance_date = datetime.strptime(data['maintenance_date'], "%Y-%m-%d").date()
+                m.maintenance_date = datetime.datetime.strptime(data['maintenance_date'], "%Y-%m-%d").date()
             if 'field1' in data:
                 m.field1 = data['field1']
             if 'field2' in data:
