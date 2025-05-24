@@ -1,4 +1,5 @@
 import os
+import base64
 
 from http import HTTPStatus
 from functools import wraps
@@ -49,3 +50,10 @@ def require_api_key(f):
             return {"error": "Unauthorized"}
         return f(*args, **kwargs)
     return decorated_function
+
+def encode_photo_to_base64(path: str) -> str | None:
+    """圖片路徑轉 base64 字串，若不存在回傳 None"""
+    if not path or not os.path.exists(path):
+        return None
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode("utf-8")

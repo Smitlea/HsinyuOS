@@ -181,7 +181,8 @@ site_output_payload = api_ns.model(
                     "vendor": fields.String(required=True, example="大林營造"),
                     "location": fields.String(required=True, example="台北市中山區民權東路"),
                     "latitude": fields.Float,     
-                    "longitude": fields.Float,   
+                    "longitude": fields.Float,
+                    "photo": fields.List(fields.String, required=False, example="<base64 string>"),
                     "created_at": fields.String(required=True, example="2023-10-01 12:00:00"),
                 },
             )
@@ -196,6 +197,7 @@ site_item_payload = api_ns.model(
         "location":   fields.String,
         "latitude": fields.Float,     
         "longitude": fields.Float,   
+        "note": fields.String,
         "created_at": fields.String,
     },
 )

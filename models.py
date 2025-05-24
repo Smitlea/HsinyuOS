@@ -1,22 +1,23 @@
 import os
+import json
 import datetime
 import pytz
 
 from uuid import uuid4
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
 from sqlalchemy.dialects.mysql import LONGTEXT
 from flask_sqlalchemy import SQLAlchemy
 from flask_bcrypt import Bcrypt
 
+from util import encode_photo_to_base64
+
 
 bcrypt = Bcrypt()
 db = SQLAlchemy()
-Base = declarative_base()
 tz = pytz.timezone('Asia/Taipei')
+ 
 
 class BaseTable(db.Model):
     __abstract__ = True
@@ -128,11 +129,13 @@ class ConstructionSite(db.Model):
 
     id           = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid4()))
     vendor       = db.Column(db.String(100), nullable=False)         # 廠商
-    location     = db.Column(db.String(200), nullable=False)         # 位置
+    location     = db.Column(db.String(200), nullable=False)         
     photo        = db.Column(LONGTEXT, nullable=True)    
-    latitude     = db.Column(db.Float(precision=53), nullable=True)   # double precision
-    longitude    = db.Column(db.Float(precision=53), nullable=True)  # double precision
-    created_by   = db.Column(db.Integer, db.ForeignKey("user.id"))   # 建立者
+    latitude     = db.Column(db.Float(precision=53), nullable=True)   
+    longitude    = db.Column(db.Float(precision=53), nullable=True)  
+    note         = db.Column(db.String(100), nullable=True)  
+    is_deleted   = db.Column(db.Boolean, default=False, nullable=False)  # 是否已刪除
+    created_by   = db.Column(db.Integer, db.ForeignKey("user.id"))   
     created_at   = db.Column(db.DateTime, default=datetime.datetime.now(tz))
     updated_at   = db.Column(db.DateTime, default=datetime.datetime.now(tz), onupdate=datetime.datetime.now)
 
@@ -141,17 +144,26 @@ class ConstructionSite(db.Model):
         data = {
             "id": self.id,
             "vendor": self.vendor,
+            "note": self.note,
             "location": self.location,
             "latitude": self.latitude,
             "longitude": self.longitude,
             "created_at": self.created_at,
         }
-        if include_photo:
-            data["photo"] = self.photo
+        if include_photo and self.photo:
+            try:
+                paths = json.loads(self.photo)
+                data["photo"] = [
+                    f"data:image/jpeg;base64,{encode_photo_to_base64(p)}"
+                    for p in paths if encode_photo_to_base64(p)
+                ]
+            except Exception as e:
+                data["photo"] = []
         return data
 
 if __name__ == "__main__":
     dotenv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+
     if os.path.exists(dotenv_path):
         load_dotenv(dotenv_path)
 

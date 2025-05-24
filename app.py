@@ -31,27 +31,19 @@ jwt = JWTManager(app)
 
 load_dotenv(override=True)
 
+
+
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("SQL_SERVER")
 app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY')
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(minutes=60)
 app.config["JWT_REFRESH_TOKEN_EXPIRES"] = timedelta(days=1) 
 app.config['API_KEY']= os.environ.get('API_SECRET_KEY')
- 
+
 db.init_app(app)
 with app.app_context():
     db.create_all()
     logger.info('DB init done')
 
-
-# class AuthorizationManager():
-#     def __init__(self):
-#         self.permission = 0
-
-#     def check_permission(self, user_id):
-#         user = User.query.get(user_id)
-#         if user:
-#             self.permission = user.permission
-#         return self.permission
 
 @api_ns.route('/api/register', methods=['POST'])
 class Register(Resource):
@@ -202,4 +194,5 @@ class Refresh(Resource):
 #     users = db.session.execute(db.select(User).order_by(User.username)).scalars()
 
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5050, debug=True)
+    print("✅ dotenv loaded")

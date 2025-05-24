@@ -1,5 +1,8 @@
-import base64
 import os
+import base64
+import json
+
+
 
 from flask_restx import Resource
 from flask_jwt_extended import jwt_required, get_jwt_identity
@@ -8,7 +11,7 @@ from payload import (
     api_ns, general_output_payload, site_input_payload, site_output_payload, site_list_output
 )
 from werkzeug.exceptions import BadRequest
-from util import handle_request_exception
+from util import handle_request_exception, encode_photo_to_base64
 from payload import api
 from logger import logging
 
@@ -17,23 +20,23 @@ PHOTO_DIR = "static/site_photos"
 os.makedirs(PHOTO_DIR, exist_ok=True)
 
 
-def save_photo(site_id: str, b64: str) -> str:
-    """Base64 轉檔並回傳路徑"""
-    file_path = os.path.join(PHOTO_DIR, f"{site_id}.jpg")
-    with open(file_path, "wb") as f:
-        f.write(base64.b64decode(b64))
-    return file_path
-
-def save_photos(site_id: str, photo_list: list[str]) -> list[str]:
+def save_photos(site_vendor: str, site_id_prefix:str, photo_list: list[str]) -> list[str]:
     """儲存多張 Base64 圖片，回傳每張路徑"""
-    saved_paths = []
+    logger.debug(f"Saving {photo_list} photos for site {site_vendor}")
+    photos_path = []
     for idx, b64 in enumerate(photo_list):
-        filename = f"{site_id}_{idx}.jpg"
+        try:
+            b64 = b64.strip()
+            if "," in b64:
+                b64 = b64.split(",", 1)[-1]
+        except Exception as e:
+            raise BadRequest(f"第 {idx+1} 張圖片 base64 格式錯誤：{e}")
+        filename = f"{site_vendor}_{site_id_prefix}_{idx}.jpg"
         file_path = os.path.join(PHOTO_DIR, filename)
         with open(file_path, "wb") as f:
             f.write(base64.b64decode(b64))
-        saved_paths.append(file_path)
-    return saved_paths
+        photos_path.append(file_path)
+    return photos_path
 
 # ------------------  工地總覽  ------------------
 
@@ -46,8 +49,8 @@ class SiteCollection(Resource):
     @api.marshal_with(site_list_output)
     def get(self):
         try:
-            sites = ConstructionSite.query.all()
-            return {"status": 0, "result": [site.to_dict() for site in sites]}
+            sites = ConstructionSite.query.filter_by(is_deleted=False).all()
+            return {"status": 0, "result": [site.to_dict(include_photo=False) for site in sites]}
         except Exception as e:
             error_class = e.__class__.__name__
             detail = e.args[0]
@@ -75,20 +78,24 @@ class SiteCollection(Resource):
             except ValueError:
                 raise BadRequest("經緯度輸入錯誤. 期望 'lat,lon'")
 
-        photo = None
+
 
         site = ConstructionSite(
-            vendor=data["vendor"],
-            location=data["location"],
-            latitude=latitude,
-            longitude=longitude,
-            photo=photo,
-            created_by=user.id,
+            vendor = data["vendor"],
+            location = data["location"],
+            latitude = latitude,
+            longitude = longitude,
+            note = data.get("note"),
+            created_by = user.id
         )
-        if b64 := data.get("photo"):
-            photo = save_photo(site.id, b64)
-
         db.session.add(site)
+        db.session.flush()  # 先儲存以獲得 site.id
+
+        if photo_list := data.get("photo"): 
+            site_id_prefix = site.id[:8]
+            photos_path = save_photos(site.vendor, site_id_prefix, photo_list)
+            site.photo = json.dumps(photos_path)
+
         db.session.commit()
         return {"status": 0, "result": "工地建立成功"}
 
@@ -102,7 +109,8 @@ class SiteItem(Resource):
     @api.marshal_with(site_output_payload)
     def get(self, site_id):
         site = ConstructionSite.query.get_or_404(site_id)
-        return {"status": 0, "result": site}
+        result = site.to_dict(include_photo=True)
+        return {"status": 0, "result": result}
 
 
     @handle_request_exception
@@ -113,39 +121,39 @@ class SiteItem(Resource):
         try:
             data = api.payload
             site = ConstructionSite.query.get_or_404(site_id)
-            coordinates = data.get("coordinates")
-            latitude = longitude = None
 
+            # 經緯度處理
+            coordinates = data.get("coordinates")
             if coordinates:
                 try:
                     lat_str, lon_str = coordinates.split(",")
-                    latitude = float(lat_str.strip())
-                    longitude = float(lon_str.strip())
-                    site.latitude = latitude
-                    site.longitude = longitude
+                    site.latitude = float(lat_str.strip())
+                    site.longitude = float(lon_str.strip())
                 except ValueError:
-                    raise BadRequest("經緯度輸入錯誤. 期望 'lat,lon'")
-                print(f"latitude: {latitude}, longitude: {longitude}")
+                    raise BadRequest("經緯度輸入錯誤. 期望 'lat,lon'", 400)
             else:
-                site.latitude  = data.get("latitude",  site.latitude)
+                site.latitude = data.get("latitude", site.latitude)
                 site.longitude = data.get("longitude", site.longitude)
-                
 
-            site.vendor   = data.get("vendor",   site.vendor)
+            # 更新 vendor / location
+            site.vendor = data.get("vendor", site.vendor)
             site.location = data.get("location", site.location)
-            site.photo    = data.get("photo",    site.photo)
+            site.note = data.get("note", site.note)
 
-
-            if b64 := data.get("photo"):
-                site.photo = save_photo(site.id, b64)
+            # 儲存圖片（如有）
+            if photo_list := data.get("photo"):
+                photos_path = save_photos(site.id, photo_list)
+                site.photo = json.dumps(photos_path)
 
             db.session.commit()
             return {"status": 0, "result": "工地更新成功"}
+
         except Exception as e:
             error_class = e.__class__.__name__
-            detail = e.args[0]
-            logger.warning(f"login Error: [{error_class}] detail: {detail}")
-            return {'status':1, 'result': str(e)}
+            detail = e.args[0] if e.args else ""
+            logger.warning(f"PUT 工地更新失敗: [{error_class}] detail: {detail}")
+            return {"status": 1, "result": str(e), "error": detail}
+
 
     @handle_request_exception
     @jwt_required()
@@ -158,7 +166,7 @@ class SiteItem(Resource):
             return {"status": 1, "result": "僅限最高權限可移除工地"}, 403
 
         site = ConstructionSite.query.get_or_404(site_id)
-        db.session.delete(site)
+        site.is_deleted = True
         db.session.commit()
         return {"status": 0, "result": "工地已刪除"}
 
