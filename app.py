@@ -194,5 +194,4 @@ class Refresh(Resource):
 #     users = db.session.execute(db.select(User).order_by(User.username)).scalars()
 
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=5050, debug=True)
-    print("✅ dotenv loaded")
+    app.run(host="0.0.0.0", port=5000, debug=False)

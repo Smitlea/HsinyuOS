@@ -184,6 +184,7 @@ site_output_payload = api_ns.model(
                     "longitude": fields.Float,
                     "photo": fields.List(fields.String, required=False, example="<base64 string>"),
                     "created_at": fields.String(required=True, example="2023-10-01 12:00:00"),
+                    "note": fields.String(required=False, example="工地備註"),
                 },
             )
         )

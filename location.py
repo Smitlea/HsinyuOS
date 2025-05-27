@@ -142,7 +142,8 @@ class SiteItem(Resource):
 
             # 儲存圖片（如有）
             if photo_list := data.get("photo"):
-                photos_path = save_photos(site.id, photo_list)
+                site_id_prefix = site.id[:8]
+                photos_path = save_photos(site.vendor, site_id_prefix, photo_list)
                 site.photo = json.dumps(photos_path)
 
             db.session.commit()
