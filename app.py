@@ -213,4 +213,4 @@ def handle_invalid_token(jwt_header, jwt_payload):
 #     users = db.session.execute(db.select(User).order_by(User.username)).scalars()
 
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=5050, debug=True)
+    app.run(host="0.0.0.0", port=5050, debug=False)
