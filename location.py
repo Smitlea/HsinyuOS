@@ -11,39 +11,22 @@ from payload import (
     api_ns, general_output_payload, site_input_payload, site_output_payload, site_list_output
 )
 from werkzeug.exceptions import BadRequest
-from util import handle_request_exception, encode_photo_to_base64
+from util import *
 from payload import api
 from logger import logging
 
 logger = logging.getLogger(__file__)
 PHOTO_DIR = "static/site_photos"
-os.makedirs(PHOTO_DIR, exist_ok=True)
 
 
-def save_photos(site_vendor: str, site_id_prefix:str, photo_list: list[str]) -> list[str]:
-    """儲存多張 Base64 圖片，回傳每張路徑"""
-    logger.debug(f"Saving {photo_list} photos for site {site_vendor}")
-    photos_path = []
-    for idx, b64 in enumerate(photo_list):
-        try:
-            b64 = b64.strip()
-            if "," in b64:
-                b64 = b64.split(",", 1)[-1]
-        except Exception as e:
-            raise BadRequest(f"第 {idx+1} 張圖片 base64 格式錯誤：{e}")
-        filename = f"{site_vendor}_{site_id_prefix}_{idx}.jpg"
-        file_path = os.path.join(PHOTO_DIR, filename)
-        with open(file_path, "wb") as f:
-            f.write(base64.b64decode(b64))
-        photos_path.append(file_path)
-    return photos_path
+
 
 # ------------------  工地總覽  ------------------
 
 @api_ns.route("/api/sites")
 class SiteCollection(Resource):
     """GET 列表 │ POST 建立 (任何權限)"""
-
+    @measure_db_time
     @handle_request_exception
     @jwt_required()
     @api.marshal_with(site_list_output)
@@ -64,7 +47,7 @@ class SiteCollection(Resource):
     def post(self):
         user = User.query.get(get_jwt_identity())
         if user is None:
-            return {"status": 1, "result": f"{get_jwt_identity()} 使用者不存在"}, 403
+            return {"status": 1, "result": "使用者不存在"}, 403
 
         data = api.payload
         coordinates = data.get("coordinates")
@@ -93,7 +76,8 @@ class SiteCollection(Resource):
 
         if photo_list := data.get("photo"): 
             site_id_prefix = site.id[:8]
-            photos_path = save_photos(site.vendor, site_id_prefix, photo_list)
+            filename = f"{site_id_prefix}_{site.vendor}"
+            photos_path = save_photos(filename, photo_list, PHOTO_DIR)
             site.photo = json.dumps(photos_path)
 
         db.session.commit()
@@ -142,7 +126,9 @@ class SiteItem(Resource):
 
             # 儲存圖片（如有）
             if photo_list := data.get("photo"):
-                photos_path = save_photos(site.id, photo_list)
+                site_id_prefix = site.id[:8]
+                filename = f"{site_id_prefix}_{site.vendor}"
+                photos_path = save_photos(filename, photo_list, PHOTO_DIR)
                 site.photo = json.dumps(photos_path)
 
             db.session.commit()

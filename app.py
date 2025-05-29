@@ -38,6 +38,8 @@ app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY')
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(minutes=60)
 app.config["JWT_REFRESH_TOKEN_EXPIRES"] = timedelta(days=1) 
 app.config['API_KEY']= os.environ.get('API_SECRET_KEY')
+app.config['CACHE_TYPE'] = 'RedisCache'
+app.config['CACHE_REDIS_URL'] = os.getenv('REDIS_URL')
 
 db.init_app(app)
 with app.app_context():
@@ -126,8 +128,6 @@ class ForgotPassword(Resource):
             return {'status': 1, 'result': 'User not found'}
 
         except Exception as e:
-            # if e.__class__.__name__ == 'RuntimeError:':
-            #     return {'status':1, 'result': 'JWT憑證已經過期，請重新登入'}
             error_class = e.__class__.__name__
             detail = e.args[0]
             logger.warning(f"Forgot PW Error: [{error_class}] detail: {detail}")
@@ -186,7 +186,26 @@ class Refresh(Resource):
             return {'status':1, 'result': str(e)}
 
 
+# 補充 JWT 錯誤處理
+@jwt.expired_token_loader
+def handle_expired_token(jwt_header, jwt_payload):
+    return {
+        "status": 1,
+        "result": "Token 已過期，請重新登入",
+        "error": "InvalidSignatureError: Signature verification failed"
+    }, 401
 
+@jwt.invalid_token_loader
+def handle_no_auth_header(reason):
+    return {"status": 1, "result": "請提供有效的授權憑證（Authorization Header）"}, 401
+
+@jwt.unauthorized_loader
+def handle_unauthorized(reason):
+    return {"status": 1, "result": "未授權的請求，請提供有效的 Token"}, 401
+
+@jwt.revoked_token_loader
+def handle_invalid_token(jwt_header, jwt_payload):
+    return {"status": 1, "result": "無效或已撤銷的 Token"}, 401
 
    
 # @api_ns.route("/users")
@@ -195,4 +214,3 @@ class Refresh(Resource):
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=5050, debug=True)
-    print("✅ dotenv loaded")

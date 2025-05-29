@@ -1,25 +1,30 @@
 import datetime
+import json
 import pytz
 
 from flask_restx import Resource
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from models import db, Crane, User, CraneUsage, CraneNotice, CraneMaintenance
+from models import db, Crane, User, CraneUsage, CraneNotice, CraneMaintenance, ConstructionSite
 from payload import api_ns, api_crane, api_test, api_notice, add_crane_payload, general_output_payload, add_usage_payload, add_notice_payload, add_maintenance_payload
-from util import handle_request_exception
+from sqlalchemy.orm import joinedload
+from util import *
 from logger import logging
 
 from payload import api
 logger = logging.getLogger(__file__)
 
 tz = pytz.timezone('Asia/Taipei')
+PHOTO_DIR = "static/crane_photos"
+NOTICE_DIR = "static/crane_notices"
+
 
 @api_crane.route('/api/cranes', methods=['GET', 'POST'])
 class Create_crane(Resource):
-    @handle_request_exception
     @jwt_required()
+    @handle_request_exception
     def get(self):
         try:
-            cranes = Crane.query.all()
+            cranes = (Crane.query.options(joinedload(Crane.site)).all())
             result = []
             for crane in cranes:
                 # 計算累計時數
@@ -28,21 +33,28 @@ class Create_crane(Resource):
 
                 # 判斷是否超過臨界值
                 threshold = 500 if crane.crane_type == "履帶" else 1000
-                alert = total_usage > threshold
 
                 result.append({
                     "id": crane.id,
                     "crane_number": crane.crane_number,
                     "crane_type": crane.crane_type,
-                    "location": crane.location,
-                    "photo": crane.photo,
+                    "site": {
+                        "id": crane.site.id,
+                        "vendor": crane.site.vendor,
+                        "location": crane.site.location,
+                        "latitude": crane.site.latitude,
+                        "longitude": crane.site.longitude
+                        }if crane.site else None,
+                    "latitude": crane.latitude,
+                    "longitude": crane.longitude,
                     "total_usage_hours": total_usage,
-                    "alert": alert  
+                    "alert": total_usage > threshold  
                 })
             return {"status": "0", "result": result}, 200
         except Exception as e:
             error_class = e.__class__.__name__
-            detail = e.args[0]
+            detail = e.args[0] if e.args else str(e)
+            logger.exception(f"Add Crane Error: [{type(e).__name__}] {detail}")
             logger.warning(f"Get Crane Error: [{error_class}] detail: {detail}")
             return {'status': 1, 'result': error_class, "error": e.args}, 400
         
@@ -55,90 +67,148 @@ class Create_crane(Resource):
             crane_number = data.get('crane_number')
             crane_type = data.get('crane_type')
             initial_hours = data.get('initial_hours', 100)
-            location = data.get('location')
-            photo = data.get('photo')
+            site_id = data.get("site_id")
+
+            if not (crane_number and site_id):
+                return {"status": 1, "result": "缺少車號或是工地ID"}, 400
             
+            user = User.query.get(get_jwt_identity())
+            if not user or user.permission < 1:
+                return {"status": 1, "result": "使用者不存在" if not user else "使用者權限不足"}, 403
+
+
+            # ---------- 2. 商業邏輯：同車號不能重覆 ----------
             if Crane.query.filter_by(crane_number=crane_number).first():
-                return {'status':'1', 'result': '拖車已經存在了'}
-
-            user = User.query.get_or_404(get_jwt_identity())
-
-            if user.permission < 0:
-                return {'status':'1', 'result': '使用者權限不足'}
+                return {"status": 1, "result": "吊車車號已存在"}, 409
+            
+            # -------- 3. 查工地 --------
+            site = ConstructionSite.query.get(site_id)
+            if not site:
+                return {"status": 1, "result": "找不到工地"}, 404
 
             new_crane = Crane(
                 crane_number=crane_number,
                 crane_type=crane_type,
                 initial_hours=initial_hours,
-                location=location,
-                photo=photo
+                site=site,
+                latitude=site.latitude,
+                longitude=site.longitude,
             )
-
             db.session.add(new_crane)
+            db.session.flush() 
+
+            usage = CraneUsage(
+                crane_id=new_crane.id,
+                usage_date=datetime.date.today(),
+                daily_hours=8,
+            )
+            db.session.add(usage)
+
+
+            if photo_list := data.get("photo"): 
+                photos_path = save_photos(crane_number, photo_list, PHOTO_DIR)
+                new_crane.photo = json.dumps(photos_path)
             db.session.commit()
-            return {"status": '0', "result": "Crane created successfully"}, 201
+            
+            return {"status": '0', "result": "拖車成功創建"}, 200
         except Exception as e:
             error_class = e.__class__.__name__
-            detail = e.args[0]
+            detail = e.args[0] if e.args else str(e)
             logger.warning(f"Add Crane Error: [{error_class}] detail: {detail}")
             return {'status': 1, 'result': error_class, "error": e.args}, 400
-        
-
-
-    
-
+          
 @api_crane.route('/api/cranes/<int:crane_id>', methods=['GET', 'PUT', 'DELETE'])
 class Crane_detail(Resource):
-    @handle_request_exception
     @jwt_required()
+    @handle_request_exception
     def get(self, crane_id):
         try:
-            crane = Crane.query.get_or_404(crane_id)
+            crane = Crane.query.get(crane_id)
+            if crane is None:
+                return {"status": "1", "result": "找不到指定的吊車"}, 404
+            
             usages = CraneUsage.query.filter_by(crane_id=crane_id).all()
             total_usage = crane.initial_hours + sum(u.daily_hours for u in usages)
             threshold = 500 if crane.crane_type == "履帶" else 1000
             alert = total_usage > threshold
 
+            raw = crane.photo or []    
+            photo_list = json.loads(crane.photo) if isinstance(raw, str) else raw
+            base64_photos = [encode_photo_to_base64(photo) for photo in photo_list]
+
             data = {
                 "id": crane.id,
                 "crane_number": crane.crane_number,
                 "crane_type": crane.crane_type,
-                "location": crane.location,
-                "photo": crane.photo,
+                "latitude": crane.latitude,
+                "longitude": crane.longitude,
+                "photo": base64_photos,
                 "total_usage_hours": total_usage,
                 "alert": alert
             }
             return {"status": '0', "result": data}, 200
         except Exception as e:
             error_class = e.__class__.__name__
-            detail = e.args[0]
+            detail = e.args[0] if e.args else str(e)
             logger.warning(f"Get Crane Detail Error: [{error_class}] detail: {detail}")
             return {"status": "1", "result": error_class, "error": e.args}, 400
         
-    @handle_request_exception
     @jwt_required()
+    @handle_request_exception
     @api.expect(add_crane_payload)
     @api.marshal_with(general_output_payload)
     def put(self, crane_id):
         try:
-            crane = Crane.query.get_or_404(crane_id)
-            data = api.payload
-            crane.crane_number = data.get('crane_number', crane.crane_number)
-            crane.crane_type = data.get('crane_type', crane.crane_type)
-            crane.location = data.get('location', crane.location)
-            crane.photo = data.get('photo', crane.photo)
+            crane = Crane.query.get(crane_id)
+
+            if crane is None:
+                return {"status": "1", "result": "找不到指定的吊車"}, 404
             
-            if 'initial_hours' in data:
-                crane.initial_hours = data['initial_hours']
+            data = api.payload
+            new_crane_number = data.get('crane_number')
+            new_site_id = data.get("site_id")
+
+             # ---------- 1. 驗證使用者 ----------
+            user = User.query.get(get_jwt_identity())
+            if not user or user.permission < 1:
+                return {
+                    "status": 1, "result": "使用者不存在" if not user else "使用者權限不足"
+                }, 403
+            # ---------- 2. 驗證 crane_number 是否重複 ----------
+            if new_crane_number and new_crane_number != crane.crane_number:
+                if Crane.query.filter_by(crane_number=new_crane_number).first():
+                    return {"status": 1, "result": "吊車車號已存在"}, 409
+                crane.crane_number = new_crane_number
+
+             # ---------- 3. 更新基本欄位 ----------
+            crane.crane_type = data.get('crane_type', crane.crane_type)
+            crane.initial_hours = data.get('initial_hours', crane.initial_hours)
+
+            # ---------- 4. 更新工地資訊與位置 ----------
+            if new_site_id:
+                site = ConstructionSite.query.get(new_site_id)
+                if not site:
+                    return {"status": 1, "result": "找不到工地"}, 404
+                crane.site = site
+            crane.latitude = data.get("latitude", crane.latitude)
+            crane.longitude = data.get("longitude", crane.longitude)
+
+            # ---------- 5. 更新圖片 ----------
+            if photo_list := data.get("photo"):
+                photos_path = save_photos(crane.crane_number, photo_list, PHOTO_DIR)
+                crane.photo = json.dumps(photos_path)
+
+
 
             db.session.commit()
-            return {"status": '0', "result": "Crane updated successfully."}, 200
+            return {"status": '0', "result": "拖車已成功更新."}, 200
         except Exception as e:
             error_class = e.__class__.__name__
+            detail = e.args if e.args else (str(e),)
+            logger.warning(f"Get Crane Detail Error: [{error_class}] detail: {detail}")
             return {"status": "1", "result": error_class, "error": e.args}, 400
 
         
-
 # ------------------------------
 #  Usage (CraneUsage) 相關 API
 # ------------------------------
@@ -169,7 +239,7 @@ class Create_usage(Resource):
 
         except Exception as e:
             error_class = e.__class__.__name__
-            detail = e.args[0]
+            detail = e.args[0] if e.args else str(e)
             logger.warning(f"Get Usage Error: [{error_class}] detail: {detail}")
             return {"status": "1", "result": error_class, "error": e.args}, 400
 
@@ -209,7 +279,7 @@ class Create_usage(Resource):
 
         except Exception as e:
             error_class = e.__class__.__name__
-            detail = e.args[0]
+            detail = e.args[0] if e.args else str(e)
             logger.warning(f"Add Usage Error: [{error_class}] detail: {detail}")
             return {"status": "1", "result": error_class, "error": e.args}, 400
 
@@ -238,7 +308,7 @@ class Usage(Resource):
 
         except Exception as e:
             error_class = e.__class__.__name__
-            detail = e.args[0]
+            detail = e.args[0] if e.args else str(e)
             logger.warning(f"Get Usage Detail Error: [{error_class}] detail: {detail}")
             return {"status": "1", "result": error_class, "error": e.args}, 400
 
@@ -263,7 +333,7 @@ class Usage(Resource):
 
         except Exception as e:
             error_class = e.__class__.__name__
-            detail = e.args[0]
+            detail = e.args[0] if e.args else str(e)
             logger.warning(f"Update Usage Error: [{error_class}] detail: {detail}")
             return {"status": "1", "result": error_class, "error": e.args}, 400
 
@@ -281,7 +351,7 @@ class Usage(Resource):
 
         except Exception as e:
             error_class = e.__class__.__name__
-            detail = e.args[0]
+            detail = e.args[0] if e.args else str(e)
             logger.warning(f"Delete Usage Error: [{error_class}] detail: {detail}")
             return {"status": "1", "result": error_class, "error": e.args}, 400
 
@@ -311,13 +381,14 @@ class Create_notice(Resource):
                     "notice_date": n.notice_date.isoformat(),
                     "status": n.status,
                     "title": n.title,
-                    "description": n.description
+                    "description": n.description,
+                    "photo": json.loads(n.photo)if n.photo else []
                 })
             return {"status": "0", "result": result}, 200
 
         except Exception as e:
             error_class = e.__class__.__name__
-            detail = e.args[0]
+            detail = e.args[0] if e.args else str(e)
             logger.warning(f"Get Notices Error: [{error_class}] detail: {detail}")
             return {"status": "1", "result": error_class, "error": e.args}, 400
 
@@ -354,11 +425,17 @@ class Create_notice(Resource):
             )
             db.session.add(new_notice)
             db.session.commit()
+
+            if photo_list := data.get("photo"):
+                filename = f"{crane_id}_{notice_date.strftime('%Y%m%d')}"
+                photos_path = save_photos(filename, photo_list, NOTICE_DIR)
+                new_notice.photo = json.dumps(photos_path)
+            db.session.commit()
             return {"status": "0", "result": "Crane notice created."}, 201
 
         except Exception as e:
             error_class = e.__class__.__name__
-            detail = e.args[0]
+            detail = e.args[0] if e.args else str(e)
             logger.warning(f"Add Notice Error: [{error_class}] detail: {detail}")
             return {"status": "1", "result": error_class, "error": e.args}, 400
 
@@ -389,7 +466,7 @@ class Notice(Resource):
 
         except Exception as e:
             error_class = e.__class__.__name__
-            detail = e.args[0]
+            detail = e.args[0] if e.args else str(e)
             logger.warning(f"Get Notice Detail Error: [{error_class}] detail: {detail}")
             return {"status": "1", "result": error_class, "error": e.args}, 400
 
@@ -419,7 +496,7 @@ class Notice(Resource):
 
         except Exception as e:
             error_class = e.__class__.__name__
-            detail = e.args[0]
+            detail = e.args[0] if e.args else str(e)
             logger.warning(f"Update Notice Error: [{error_class}] detail: {detail}")
             return {"status": "1", "result": error_class, "error": e.args}, 400
 
@@ -437,7 +514,7 @@ class Notice(Resource):
 
         except Exception as e:
             error_class = e.__class__.__name__
-            detail = e.args[0]
+            detail = e.args[0] if e.args else str(e)
             logger.warning(f"Delete Notice Error: [{error_class}] detail: {detail}")
             return {"status": "1", "result": error_class, "error": e.args}, 400
 
@@ -473,7 +550,7 @@ class Create_maintenance(Resource):
 
         except Exception as e:
             error_class = e.__class__.__name__
-            detail = e.args[0]
+            detail = e.args[0] if e.args else str(e)
             logger.warning(f"Get Maintenance Error: [{error_class}] detail: {detail}")
             return {"status": "1", "result": error_class, "error": e.args}, 400
 
@@ -515,7 +592,7 @@ class Create_maintenance(Resource):
 
         except Exception as e:
             error_class = e.__class__.__name__
-            detail = e.args[0]
+            detail = e.args[0] if e.args else str(e)
             logger.warning(f"Add Maintenance Error: [{error_class}] detail: {detail}")
             return {"status": "1", "result": error_class, "error": e.args}, 400
 
@@ -546,7 +623,7 @@ class Maintenance(Resource):
 
         except Exception as e:
             error_class = e.__class__.__name__
-            detail = e.args[0]
+            detail = e.args[0] if e.args else str(e)
             logger.warning(f"Get Maintenance Detail Error: [{error_class}] detail: {detail}")
             return {"status": "1", "result": error_class, "error": e.args}, 400
 
@@ -576,7 +653,7 @@ class Maintenance(Resource):
 
         except Exception as e:
             error_class = e.__class__.__name__
-            detail = e.args[0]
+            detail = e.args[0] if e.args else str(e)
             logger.warning(f"Update Maintenance Error: [{error_class}] detail: {detail}")
             return {"status": "1", "result": error_class, "error": e.args}, 400
 
@@ -594,7 +671,7 @@ class Maintenance(Resource):
 
         except Exception as e:
             error_class = e.__class__.__name__
-            detail = e.args[0]
+            detail = e.args[0] if e.args else str(e)
             logger.warning(f"Delete Maintenance Error: [{error_class}] detail: {detail}")
             return {"status": "1", "result": error_class, "error": e.args}, 400
 

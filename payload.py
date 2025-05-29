@@ -140,8 +140,8 @@ add_crane_payload = api_ns.model('新增吊車輸入', {
         'crane_number': fields.String(required=True, description='代號', default="ABC-123"),
         'crane_type': fields.String(required=True, description='圖片', default="輪式"),
         'initial_hours': fields.String(required=True, description='初始小時', default=100),
-        'location': fields.String(required=True, description='地點', default='台中港'),
-        'photo': fields.Integer(required=False, description='照片'),
+        'coordinates': fields.String(required=True, description='地點', default='台中港'),
+        "photo": fields.List(fields.String, required=False, example="path/to/photo.jpg")
 })
 
 general_output_payload = api_ns.model(
@@ -161,7 +161,7 @@ site_input_payload = api_ns.model(
         "vendor":   fields.String(required=True,  example="大林營造"),
         "location": fields.String(required=True,  example="台北市中山區民權東路"),
         'coordinates': fields.String(required=False, example="25.0478,121.5171"),
-        "photo":    fields.String(required=False, example="<base64 string>"),
+        "photo": fields.List(fields.String, required=False, example="path/to/photo.jpg")
     },
 )
 

@@ -1,8 +1,11 @@
 .env
+static/
 Pipfile
+test.py
 docker-compose.yaml
 ngrok.exe
 alembic/
 alembic.ini
 migrations/
+init.sql
 nginx/
