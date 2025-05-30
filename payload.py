@@ -111,28 +111,16 @@ add_notice_payload = api_ns.model(
 
 # 新增維修記錄
 add_maintenance_payload = api_ns.model(
-    '新增維修記錄輸入',
-    {
-        'maintenance_date': fields.String(
-            required=False,
-            description='維修日期 (YYYY-MM-DD)，不填則預設為今日',
-            default='2025-03-03'
-        ),
-        'field1': fields.String(
-            required=False,
-            description='維修欄位1，示例: 更換液壓油',
-            default='更換液壓油'
-        ),
-        'field2': fields.String(
-            required=False,
-            description='維修欄位2，示例: 技師姓名、負責人等',
-            default='技師王小明'
-        ),
-        'field3': fields.String(
-            required=False,
-            description='維修欄位3，示例: 其他備註',
-            default='需追蹤檢測'
-        ),
+    "AddMaintenance", {
+        "maintenance_date": fields.String(example="2025-05-30"),
+        "title":    fields.String(required=True,  example="更換液壓油"),
+        "note":     fields.String(required=False, example="定期保養"),
+        "material": fields.String(required=False, example="液壓油 20L"),
+        # 進階欄位：文件上標 Optional，實際由程式面控制
+        "vendor":       fields.String(example="維修達人有限公司"),
+        "vendor_cost":  fields.Float(example=12000),
+        "parts_vendor": fields.String(example="忠興油品行"),
+        "parts_cost":   fields.Float(example=3400),
     }
 )
 

@@ -47,8 +47,8 @@ class Leave(BaseTable):
     end_date = db.Column(db.TIMESTAMP, nullable=False)
     reason = db.Column(db.String(150), nullable=False)
     status = db.Column(db.Integer, default=0, nullable=False)
-    approver = db.Column(db.String(150), default=0, nullable=False)
-    user = db.relationship('User', backref=db.backref('leaves', lazy=True))
+    # approver = db.Column(db.String(150), default=0, nullable=False)
+    # user = db.relationship('User', backref=db.backref('leaves', lazy=True))
 
 class ConstructionSite(BaseTable):
     __tablename__ = "construction_site"
@@ -158,10 +158,16 @@ class CraneMaintenance(BaseTable):
     maintenance_date = db.Column(db.Date, default=datetime.datetime.now(tz), comment="維修日期")
 
     # 三個欄位可做彈性運用，例如記錄維修部位、維修內容、負責人等
-    field1 = db.Column(db.String(255), nullable=True, comment="自訂欄位1")
-    field2 = db.Column(db.String(255), nullable=True, comment="自訂欄位2")
-    field3 = db.Column(db.String(255), nullable=True, comment="自訂欄位3")
-    created_by   = db.Column(db.Integer, db.ForeignKey("user.id"))
+    title    = db.Column(db.String(128), nullable=False)      # 標題
+    note     = db.Column(db.Text,        nullable=True)       # 備註
+    material = db.Column(db.String(128), nullable=True)       # 使用材料
+
+    vendor         = db.Column(db.String(128))
+    vendor_cost    = db.Column(db.Numeric(12, 2))
+    parts_vendor   = db.Column(db.String(128))
+    parts_cost     = db.Column(db.Numeric(12, 2))
+    created_by   = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False) 
+    is_deleted   = db.Column(db.Boolean, default=False, nullable=False)
 
 
     crane = db.relationship("Crane", backref=db.backref("maintenances", cascade="all, delete-orphan"))

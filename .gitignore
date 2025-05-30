@@ -8,4 +8,5 @@ alembic/
 alembic.ini
 migrations/
 init.sql
+app.py
 nginx/

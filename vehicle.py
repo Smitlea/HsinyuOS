@@ -1,14 +1,20 @@
-import datetime
+from datetime import datetime, date, timedelta
 import json
 import pytz
 
 from flask_restx import Resource
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from models import db, Crane, User, CraneUsage, CraneNotice, CraneMaintenance, ConstructionSite
-from payload import api_ns, api_crane, api_test, api_notice, add_crane_payload, general_output_payload, add_usage_payload, add_notice_payload, add_maintenance_payload
 from sqlalchemy.orm import joinedload
-from util import *
+from models import db, Crane, User, CraneUsage, CraneNotice, CraneMaintenance, ConstructionSite
+
+from payload import (
+    api_ns, api_crane, api_test, api_notice,
+    add_crane_payload, general_output_payload,
+    add_usage_payload, add_notice_payload, add_maintenance_payload
+)
+from util import handle_request_exception, save_photos, encode_photo_to_base64
 from logger import logging
+
 
 from payload import api
 logger = logging.getLogger(__file__)
@@ -99,7 +105,7 @@ class Create_crane(Resource):
 
             usage = CraneUsage(
                 crane_id=new_crane.id,
-                usage_date=datetime.date.today(),
+                usage_date=date.today(),
                 daily_hours=8,
             )
             db.session.add(usage)
@@ -226,8 +232,16 @@ class Create_usage(Resource):
         取得指定 crane_id 的所有使用紀錄
         """
         try:
-            # 若需要確認 crane_id 存在，可再引用 Crane.query.get_or_404(crane_id)
-            usages = CraneUsage.query.filter_by(crane_id=crane_id).order_by(CraneUsage.usage_date.desc()).all()
+
+            crane = Crane.query.get(crane_id)
+            if crane is None:
+                return {"status": "1", "result": "找不到指定吊車"}, 404
+            
+            cutoff_date = datetime.now(tz).date() - timedelta(days=30)
+            usages = CraneUsage.query.filter(
+                CraneUsage.crane_id == crane_id,
+                CraneUsage.usage_date >= cutoff_date
+            ).order_by(CraneUsage.usage_date.desc()).all()
             result = []
             for u in usages:
                 result.append({
@@ -263,9 +277,9 @@ class Create_usage(Resource):
 
             # 判斷日期格式或預設值
             if not usage_date:
-                usage_date = datetime.datetime.now(tz).date()
+                usage_date = datetime.now(tz).date()
             else:
-                usage_date = datetime.datetime.strptime(usage_date, "%Y-%m-%d").date()
+                usage_date = datetime.strptime(usage_date, "%Y-%m-%d").date()
 
             new_usage = CraneUsage(
                 crane_id=crane_id,
@@ -297,7 +311,10 @@ class Usage(Resource):
         取得單筆 usage 資訊
         """
         try:
-            usage = CraneUsage.query.get_or_404(usage_id)
+            usage = CraneUsage.query.get(usage_id)
+            if usage is None:
+                return {"status": "1", "result": "找不到指定的使用紀錄"}, 404
+            
             data = {
                 "id": usage.id,
                 "crane_id": usage.crane_id,
@@ -324,7 +341,7 @@ class Usage(Resource):
             usage = CraneUsage.query.get_or_404(usage_id)
             data = api_ns.payload
             if 'usage_date' in data and data['usage_date']:
-                usage.usage_date = datetime.datetime.strptime(data['usage_date'], "%Y-%m-%d").date()
+                usage.usage_date = datetime.strptime(data['usage_date'], "%Y-%m-%d").date()
             if 'daily_hours' in data:
                 usage.daily_hours = data['daily_hours']
 
@@ -412,9 +429,9 @@ class Create_notice(Resource):
             description = data.get('description')
 
             if not notice_date:
-                notice_date = datetime.datetime.now(tz).date()
+                notice_date = datetime.now(tz).date()
             else:
-                notice_date = datetime.datetime.strptime(notice_date, "%Y-%m-%d").date()
+                notice_date = datetime.strptime(notice_date, "%Y-%m-%d").date()
 
             new_notice = CraneNotice(
                 crane_id=crane_id,
@@ -483,7 +500,7 @@ class Notice(Resource):
             data = api_ns.payload
 
             if 'notice_date' in data and data['notice_date']:
-                notice.notice_date = datetime.datetime.strptime(data['notice_date'], "%Y-%m-%d").date()
+                notice.notice_date = datetime.strptime(data['notice_date'], "%Y-%m-%d").date()
             if 'status' in data:
                 notice.status = data['status']
             if 'title' in data:
@@ -536,16 +553,34 @@ class Create_maintenance(Resource):
         查詢某台吊車的維修列表
         """
         try:
-            maintenances = CraneMaintenance.query.filter_by(crane_id=crane_id).order_by(CraneMaintenance.maintenance_date.desc()).all()
+            user  = User.query.get(get_jwt_identity())
+            if user is None:
+                return {"status": "1", "result": "使用者不存在"}, 403
+            
+            crane = Crane.query.get(crane_id)
+            if crane is None:
+                return {"status": "1", "result": f"找不到 ID 為 {crane_id} 的吊車"}, 404
+
+            maintenances = CraneMaintenance.query.filter_by(
+                crane_id=crane_id
+            ).order_by(CraneMaintenance.maintenance_date.desc()).all()
             result = []
             for m in maintenances:
-                result.append({
-                    "id": m.id,
+                record = {
+                    "id":               m.id,
                     "maintenance_date": m.maintenance_date.isoformat(),
-                    "field1": m.field1,
-                    "field2": m.field2,
-                    "field3": m.field3
-                })
+                    "title":            m.title,
+                    "note":             m.note,
+                    "material":         m.material,
+                }
+                if user.permission == 2:          # 最高權限看全部
+                    record.update({
+                        "vendor":       m.vendor,
+                        "vendor_cost":  float(m.vendor_cost) if m.vendor_cost else None,
+                        "parts_vendor": m.parts_vendor,
+                        "parts_cost":   float(m.parts_cost) if m.parts_cost else None,
+                    })
+                result.append(record)
             return {"status": "0", "result": result}, 200
 
         except Exception as e:
@@ -563,32 +598,54 @@ class Create_maintenance(Resource):
         新增維修記錄
         """
         try:
-            user = User.query.get_or_404(get_jwt_identity())
-            if user.permission < 0:
-                return {"status": "1", "result": "使用者權限不足"}
+            user = User.query.get(get_jwt_identity())
+            if user is None:
+                return {"status": "1", "result": "使用者不存在"}, 403
+            elif user.permission == 0:
+                return {"status": "1", "result": "使用者權限不足"}, 403
 
             data = api_ns.payload
             maintenance_date = data.get('maintenance_date')
-            field1 = data.get('field1')
-            field2 = data.get('field2')
-            field3 = data.get('field3')
+            title    = data.get("title")
+            note     = data.get("note")
+            material = data.get("material")
+            if not title:
+                return {"status": 1, "result": "缺少標題"}, 400
 
-            if not maintenance_date:
-                maintenance_date = datetime.datetime.now(tz).date()
-            else:
-                maintenance_date = datetime.datetime.strptime(maintenance_date, "%Y-%m-%d").date()
+            try:
+                maint_date = datetime.strptime(
+                    data.get("maintenance_date") or datetime.now(tz).strftime("%Y-%m-%d"),
+                    "%Y-%m-%d"
+                ).date()
+            except ValueError:
+                return {"status": 1, "result": "maintenance_date 格式錯誤，須 YYYY-MM-DD"}, 400
+            
+            if user.permission < 2 and any(
+                data.get(k) for k in ["vendor", "vendor_cost", "parts_vendor", "parts_cost"]
+            ):
+                return {
+                    "status": 1,
+                    "result": "中/低權限不得填寫金額或廠商欄位"
+                }, 403
 
-            new_maintenance = CraneMaintenance(
+            maintenance = CraneMaintenance(
                 crane_id=crane_id,
-                maintenance_date=maintenance_date,
-                field1=field1,
-                field2=field2,
-                field3=field3
+                maintenance_date=maint_date,
+                title=title,
+                note=note,
+                material=material,
+                created_by=user.id
             )
-            db.session.add(new_maintenance)
+            if user.permission == 2:
+                maintenance.vendor        = data.get("vendor")
+                maintenance.vendor_cost   = data.get("vendor_cost")
+                maintenance.parts_vendor  = data.get("parts_vendor")
+                maintenance.parts_cost    = data.get("parts_cost")
+
+            db.session.add(maintenance)
             db.session.commit()
 
-            return {"status": "0", "result": "Crane maintenance record created."}, 201
+            return {"status": "0", "result": "拖車維修紀錄已成功創建"}, 200
 
         except Exception as e:
             error_class = e.__class__.__name__
@@ -610,15 +667,29 @@ class Maintenance(Resource):
         取得單筆維修記錄
         """
         try:
-            m = CraneMaintenance.query.get_or_404(maintenance_id)
+            m = (
+                CraneMaintenance.query.filter_by(id=maintenance_id, is_deleted=False)
+                .first()
+            )
+            if m is None:
+                return {"status": "1", "result": "找不到指定的維修記錄"}, 404
+            user = User.query.get(get_jwt_identity())
+            if user is None:
+                return {"status": "1", "result": "使用者不存在"}, 403
+            permission = user.permission
+
             data = {
                 "id": m.id,
                 "crane_id": m.crane_id,
                 "maintenance_date": m.maintenance_date.isoformat(),
-                "field1": m.field1,
-                "field2": m.field2,
-                "field3": m.field3
             }
+            if permission == 2:      # 最高權限補全敏感欄位
+                data.update({
+                    "vendor":       m.vendor,
+                    "vendor_cost":  float(m.vendor_cost) if m.vendor_cost else None,
+                    "parts_vendor": m.parts_vendor,
+                    "parts_cost":   float(m.parts_cost) if m.parts_cost else None,
+                })
             return {"status": "0", "result": data}, 200
 
         except Exception as e:
@@ -636,20 +707,40 @@ class Maintenance(Resource):
         更新單筆維修記錄
         """
         try:
-            m = CraneMaintenance.query.get_or_404(maintenance_id)
-            data = api_ns.payload
+            user = User.query.get(get_jwt_identity())
+            if user is None:
+                return {"status": "1", "result": "使用者不存在"}, 403
+            if user.permission == 0:
+                return {"status": 1, "result": "使用者權限不足"}, 403
+
+            m = CraneMaintenance.query.get(maintenance_id)
+            if m is None:
+                return {"status": "1", "result": "找不到指定的維修記錄"}, 404
+            data = api_ns.payload or {}
 
             if 'maintenance_date' in data and data['maintenance_date']:
-                m.maintenance_date = datetime.datetime.strptime(data['maintenance_date'], "%Y-%m-%d").date()
-            if 'field1' in data:
-                m.field1 = data['field1']
-            if 'field2' in data:
-                m.field2 = data['field2']
-            if 'field3' in data:
-                m.field3 = data['field3']
+                try:
+                    m.maintenance_date = datetime.strptime(
+                        data["maintenance_date"], "%Y-%m-%d"
+                    ).date()
+                except ValueError:
+                    return {"status": 1, "result": "maintenance_date 格式錯誤"}, 400
+            # 基礎欄位（中以上皆可改）
+            for k in ("title", "note", "material"):
+                if k in data:
+                    setattr(m, k, data[k])
+            # 最高權限才能改敏感欄位
+            if user.permission == 2:
+                for k in ("vendor", "vendor_cost", "parts_vendor", "parts_cost"):
+                    if k in data:
+                        setattr(m, k, data[k])
+            else:
+                # 若中權限硬塞敏感欄位 → 拒絕
+                if any(data.get(x) is not None for x in ("vendor", "vendor_cost", "parts_vendor", "parts_cost")):
+                    return {"status": 1, "result": "中/低權限不得修改金額或廠商欄位"}, 403
 
             db.session.commit()
-            return {"status": "0", "result": "Crane maintenance record updated."}, 200
+            return {"status": "0", "result": "吊車維修紀錄已成功更新"}, 200
 
         except Exception as e:
             error_class = e.__class__.__name__
@@ -664,8 +755,16 @@ class Maintenance(Resource):
         刪除單筆維修記錄
         """
         try:
-            m = CraneMaintenance.query.get_or_404(maintenance_id)
-            db.session.delete(m)
+            user = User.query.get(get_jwt_identity())
+            if user is None:
+                return {"status": "1", "result": "使用者不存在"}, 403
+            if user.permission < 2:
+                return {"status": 1, "result": "使用者權限不足"}, 403
+            m = CraneMaintenance.query.get(maintenance_id)
+            if m is None:
+                return {"status": "1", "result": "找不到指定的維修記錄"}, 404
+            
+            m.is_deleted = True
             db.session.commit()
             return{"status": "0", "result": "Crane maintenance record deleted."}, 200
 
