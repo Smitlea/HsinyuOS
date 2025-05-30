@@ -148,8 +148,13 @@ class Crane_detail(Resource):
                 "id": crane.id,
                 "crane_number": crane.crane_number,
                 "crane_type": crane.crane_type,
-                "latitude": crane.latitude,
-                "longitude": crane.longitude,
+                "site": {
+                        "id": crane.site.id,
+                        "vendor": crane.site.vendor,
+                        "location": crane.site.location,
+                        "latitude": crane.site.latitude,
+                        "longitude": crane.site.longitude
+                        }if crane.site else None,
                 "photo": base64_photos,
                 "total_usage_hours": total_usage,
                 "alert": alert
@@ -603,9 +608,8 @@ class Create_maintenance(Resource):
     GET: 取得某台吊車的所有維修記錄
     POST: 為某台吊車新增維修記錄
     """
-
-    @handle_request_exception
     @jwt_required()
+    @handle_request_exception
     def get(self, crane_id):
         """
         查詢某台吊車的維修列表
