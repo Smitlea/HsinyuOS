@@ -110,6 +110,18 @@ add_notice_payload = api_ns.model(
 )
 
 # 新增維修記錄
+notice_color_model = api.model(
+    "NoticeColor",
+    {
+        "status_name": fields.String(
+            required=True, description="狀態名稱", example="保養"
+        ),
+        "color": fields.String(
+            required=True, description="Hex 或 CSS 顏色名稱", example="#ffa500"
+        ),
+    },
+)
+
 add_maintenance_payload = api_ns.model(
     "AddMaintenance", {
         "maintenance_date": fields.String(example="2025-05-30"),

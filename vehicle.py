@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, date, timedelta
 import json
 import pytz
@@ -5,12 +6,13 @@ import pytz
 from flask_restx import Resource
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from sqlalchemy.orm import joinedload
-from models import db, Crane, User, CraneUsage, CraneNotice, CraneMaintenance, ConstructionSite
+from models import db, Crane, User, CraneUsage, CraneNotice, CraneMaintenance, ConstructionSite, NoticeColor
 
 from payload import (
     api_ns, api_crane, api_test, api_notice,
     add_crane_payload, general_output_payload,
-    add_usage_payload, add_notice_payload, add_maintenance_payload
+    add_usage_payload, add_notice_payload, add_maintenance_payload,
+    notice_color_model
 )
 from util import handle_request_exception, save_photos, encode_photo_to_base64
 from logger import logging
@@ -383,23 +385,37 @@ class Create_notice(Resource):
     POST: 為某台吊車新增注意事項
     """
 
-    @handle_request_exception
     @jwt_required()
+    @handle_request_exception
     def get(self, crane_id):
         """
         查詢 notice 列表
         """
         try:
-            notices = CraneNotice.query.filter_by(crane_id=crane_id).order_by(CraneNotice.notice_date.desc()).all()
-            result = []
+            if not Crane.query.get(crane_id):
+                return {"status": "1", "result": f"找不到 ID 為 {crane_id} 的吊車"}, 404
+            
+            notices = CraneNotice.query.filter_by(
+                crane_id=crane_id
+            ).order_by(CraneNotice.notice_date.desc()).all()
+
+            if not notices:
+                return {"status": "1", "result": "此吊車尚無任何通知紀錄"}, 404
+            
+
+            
+            result = list()
             for n in notices:
+                raw = n.photo or []
+                photo_list = json.loads(n.photo) if isinstance(raw, str) else raw
+                base64_photos = [encode_photo_to_base64(photo) for photo in photo_list]
                 result.append({
                     "id": n.id,
                     "notice_date": n.notice_date.isoformat(),
                     "status": n.status,
                     "title": n.title,
                     "description": n.description,
-                    "photo": json.loads(n.photo)if n.photo else []
+                    "photo": base64_photos
                 })
             return {"status": "0", "result": result}, 200
 
@@ -418,7 +434,7 @@ class Create_notice(Resource):
         新增注意事項
         """
         try:
-            user = User.query.get_or_404(get_jwt_identity())
+            user = User.query.get(get_jwt_identity())
             if user.permission < 0:
                 return {"status": "1", "result": "使用者權限不足"}
 
@@ -462,15 +478,16 @@ class Notice(Resource):
     """
     針對單筆 Notice 的 查詢 / 更新 / 刪除
     """
-
-    @handle_request_exception
     @jwt_required()
+    @handle_request_exception
     def get(self, notice_id):
         """
         取得單筆 Notice 資訊
         """
         try:
-            notice = CraneNotice.query.get_or_404(notice_id)
+            notice = CraneNotice.query.get(notice_id)
+            if notice is None:
+                return {"status": "1", "result": "找不到指定的注意事項"}, 404
             data = {
                 "id": notice.id,
                 "crane_id": notice.crane_id,
@@ -486,9 +503,9 @@ class Notice(Resource):
             detail = e.args[0] if e.args else str(e)
             logger.warning(f"Get Notice Detail Error: [{error_class}] detail: {detail}")
             return {"status": "1", "result": error_class, "error": e.args}, 400
-
-    @handle_request_exception
+        
     @jwt_required()
+    @handle_request_exception
     @api_ns.expect(add_notice_payload)
     @api_ns.marshal_with(general_output_payload)
     def put(self, notice_id):
@@ -516,15 +533,17 @@ class Notice(Resource):
             detail = e.args[0] if e.args else str(e)
             logger.warning(f"Update Notice Error: [{error_class}] detail: {detail}")
             return {"status": "1", "result": error_class, "error": e.args}, 400
-
-    @handle_request_exception
+        
     @jwt_required()
+    @handle_request_exception
     def delete(self, notice_id):
         """
         刪除單筆 Notice
         """
         try:
-            notice = CraneNotice.query.get_or_404(notice_id)
+            notice = CraneNotice.query.get(notice_id)
+            if notice is None:
+                return {"status": "1", "result": "找不到指定的注意事項"}, 404
             db.session.delete(notice)
             db.session.commit()
             return {"status": "0", "result": "Crane notice deleted."}, 200
@@ -535,6 +554,45 @@ class Notice(Resource):
             logger.warning(f"Delete Notice Error: [{error_class}] detail: {detail}")
             return {"status": "1", "result": error_class, "error": e.args}, 400
 
+
+@api_test.route("/api/notice-colors", methods=["GET", "POST"])
+class NoticeColorList(Resource):
+    """
+    GET  : 取得所有狀態與顏色 (dict)
+    POST : 新增一筆狀態與顏色
+    """
+
+    @jwt_required()
+    @handle_request_exception
+    def get(self):
+        rows = NoticeColor.query.all()
+        result: dict[str, str] = {}
+        for r in rows:
+            result.update(r.as_dict())
+        return {"status": "0", "result": result}, 200
+
+    @api.expect(notice_color_model)
+    @jwt_required()
+    @handle_request_exception
+    def post(self):
+        data = api.payload or {}
+        status_name: str | None = data.get("status_name")
+        color: str | None = data.get("color")
+
+        if not (status_name and color):
+            return {"status": "1", "result": "缺少 status_name 或 color"}, 400
+        
+        if not re.fullmatch(r"#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})", color):
+            return {"status": "1", "result": "色碼格式錯誤 (#FFF 或 #FFFFFF)"}, 400
+
+        # 同名狀態不得重複
+        if NoticeColor.query.filter_by(status=status_name).first():
+            return {"status": "1", "result": "有相同的狀態已經存在"}, 409
+
+        nc = NoticeColor(status=status_name, color=color)
+        db.session.add(nc)
+        db.session.commit()
+        return {"status": "0", "result": f"已新增 {status_name} → {color}"}, 201
 
 # -----------------------------------
 #  Maintenance (CraneMaintenance) 相關 API
@@ -589,8 +647,8 @@ class Create_maintenance(Resource):
             logger.warning(f"Get Maintenance Error: [{error_class}] detail: {detail}")
             return {"status": "1", "result": error_class, "error": e.args}, 400
 
-    @handle_request_exception
     @jwt_required()
+    @handle_request_exception
     @api_ns.expect(add_maintenance_payload)
     @api_ns.marshal_with(general_output_payload)
     def post(self, crane_id):
@@ -660,8 +718,8 @@ class Maintenance(Resource):
     針對單筆維修記錄的 查詢 / 更新 / 刪除
     """
 
-    @handle_request_exception
     @jwt_required()
+    @handle_request_exception
     def get(self, maintenance_id):
         """
         取得單筆維修記錄
@@ -698,8 +756,8 @@ class Maintenance(Resource):
             logger.warning(f"Get Maintenance Detail Error: [{error_class}] detail: {detail}")
             return {"status": "1", "result": error_class, "error": e.args}, 400
 
-    @handle_request_exception
     @jwt_required()
+    @handle_request_exception
     @api_ns.expect(add_maintenance_payload)
     @api_ns.marshal_with(general_output_payload)
     def put(self, maintenance_id):
@@ -747,9 +805,9 @@ class Maintenance(Resource):
             detail = e.args[0] if e.args else str(e)
             logger.warning(f"Update Maintenance Error: [{error_class}] detail: {detail}")
             return {"status": "1", "result": error_class, "error": e.args}, 400
-
-    @handle_request_exception
+        
     @jwt_required()
+    @handle_request_exception
     def delete(self, maintenance_id):
         """
         刪除單筆維修記錄

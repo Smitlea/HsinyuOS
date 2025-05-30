@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from flask_jwt_extended import (
     JWTManager, create_access_token, jwt_required, get_jwt_identity, create_refresh_token
 )
+from sqlalchemy import inspect      
 from payload import (
     api_ns, api, app,
     refresh_input_payload,
@@ -32,7 +33,9 @@ jwt = JWTManager(app)
 load_dotenv(override=True)
 
 
-
+# ─────────────────────────────────────────────────────────────
+# Flask 設定
+# ─────────────────────────────────────────────────────────────
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("SQL_SERVER")
 app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY')
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(minutes=60)
@@ -42,10 +45,35 @@ app.config['API_KEY']= os.environ.get('API_SECRET_KEY')
 app.config['CACHE_TYPE'] = 'RedisCache'
 app.config['CACHE_REDIS_URL'] = os.getenv('REDIS_URL')
 
+# ─────────────────────────────────────────────────────────────
+# 初始建表＋預設資料
+# ─────────────────────────────────────────────────────────────
+DEFAULT_NOTICE_COLORS = {
+    "待修": "#ff0000",   # 紅
+    "異常": "#00ff00",   # 綠
+    "現場": "#0000ff",   # 藍
+}
+
+def _init_notice_color():
+    """如果 notice_color 表不存在就創建並塞預設三筆。"""
+    inspector = inspect(db.engine)
+    if NoticeColor.__tablename__ not in inspector.get_table_names():
+        logger.info("Creating notice_color table ...")
+        NoticeColor.__table__.create(bind=db.engine)
+
+    # 檢查並插入預設資料
+    for status, color in DEFAULT_NOTICE_COLORS.items():
+        if not NoticeColor.query.filter_by(status=status).first():
+            db.session.add(NoticeColor(status=status, color=color))
+            logger.info(f"Insert default NoticeColor: {status} → {color}")
+    db.session.commit()
+
 db.init_app(app)
 with app.app_context():
     db.create_all()
+    _init_notice_color() 
     logger.info('DB init done')
+
 
 
 @api_ns.route('/api/register', methods=['POST'])
@@ -144,8 +172,8 @@ class Test(Resource):
 @api_ns.route('/api/auth', methods=['GET'])
 class Auth(Resource):
     @api.doc(params={'jwt': ''})
-    @handle_request_exception
     @jwt_required()
+    @handle_request_exception
     def get(self):
         user = User.query.get(get_jwt_identity())
         if not user:
@@ -155,8 +183,8 @@ class Auth(Resource):
 @api_ns.route('/api/check_permission', methods=['GET'])
 class Check(Resource):
     @api.doc(params={'jwt': ''})
-    @handle_request_exception
     @jwt_required()
+    @handle_request_exception
     def get(self):
         user = db.session.get(User, get_jwt_identity())
         if not user:
