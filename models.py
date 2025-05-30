@@ -148,6 +148,17 @@ class CraneNotice(BaseTable):
     def __repr__(self):
         return f"<CraneNotice crane_id={self.crane_id}, date={self.notice_date}, status={self.status}>"
 
+class NoticeColor(BaseTable):
+    __tablename__ = "notice_color"
+    
+    id = db.Column(db.Integer, primary_key=True)
+    status = db.Column(db.String(50), unique=True, nullable=False)
+    color = db.Column(db.String(20), nullable=False)
+
+    def as_dict(self) -> dict[str, str]:
+        """回傳 {status: color} 的單筆 dict 方便外層組裝"""
+        return {self.status: self.color}
+
 # ------------ Crane ←→ CraneMaintenance ------------ #
 class CraneMaintenance(BaseTable):
     """
