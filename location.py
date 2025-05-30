@@ -40,8 +40,8 @@ class SiteCollection(Resource):
             logger.warning(f"login Error: [{error_class}] detail: {detail}")
             return {'status':1, 'result': str(e)}
 
-    @handle_request_exception
     @jwt_required()
+    @handle_request_exception
     @api.expect(site_input_payload)
     @api.marshal_with(general_output_payload)
     def post(self):

@@ -37,6 +37,7 @@ app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("SQL_SERVER")
 app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY')
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(minutes=60)
 app.config["JWT_REFRESH_TOKEN_EXPIRES"] = timedelta(days=1) 
+app.config["PROPAGATE_EXCEPTIONS"] = True
 app.config['API_KEY']= os.environ.get('API_SECRET_KEY')
 app.config['CACHE_TYPE'] = 'RedisCache'
 app.config['CACHE_REDIS_URL'] = os.getenv('REDIS_URL')
@@ -197,15 +198,27 @@ def handle_expired_token(jwt_header, jwt_payload):
 
 @jwt.invalid_token_loader
 def handle_no_auth_header(reason):
-    return {"status": 1, "result": "請提供有效的授權憑證（Authorization Header）"}, 401
+    return {
+            "status": 1,
+            "result": "請提供有效的授權憑證（Authorization Header）",
+            "error":"InvalidSignatureError:  Signature verification failed" 
+    }, 401
 
 @jwt.unauthorized_loader
 def handle_unauthorized(reason):
-    return {"status": 1, "result": "未授權的請求，請提供有效的 Token"}, 401
+    return {
+        "status": 1, 
+        "result": "未授權的請求，請提供有效的 Token",
+        "error": "Unauthorized: No Authorization header provided"
+    }, 401
 
 @jwt.revoked_token_loader
 def handle_invalid_token(jwt_header, jwt_payload):
-    return {"status": 1, "result": "無效或已撤銷的 Token"}, 401
+    return {
+        "status": 1,
+        "result": "無效或已撤銷的 Token",
+        "error": "Token has been revoked"
+    }, 401
 
    
 # @api_ns.route("/users")
@@ -213,4 +226,4 @@ def handle_invalid_token(jwt_header, jwt_payload):
 #     users = db.session.execute(db.select(User).order_by(User.username)).scalars()
 
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=5050, debug=False)
+    app.run(host="0.0.0.0", port=5000, debug=False)
