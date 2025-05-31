@@ -1,6 +1,7 @@
 import os
 import time
 import functools
+import json
 import base64
 
 from http import HTTPStatus
@@ -41,6 +42,29 @@ def handle_request_exception(func):
 
     return wrapper
 
+def encode_photo_to_base64(path: str) -> str | None:
+    """圖片路徑轉 base64 字串，若不存在回傳 None"""
+    if not path or not os.path.exists(path):
+        return None
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode("utf-8")
+
+def photo_path_to_base64(photo_field: str | list[str]) -> list[str]:
+    """
+    將圖片路徑字串或列表轉換為 base64 字串列表。
+    
+    Args:
+        photo_field (str | list[str]): 可能為 JSON 字串或圖片路徑列表
+
+    Returns:
+        list[str]: 對應的 base64 圖片字串列表
+    """
+    try:
+        photo_list = json.loads(photo_field) if isinstance(photo_field, str) else (photo_field or [])
+        return [encode_photo_to_base64(path) for path in photo_list]
+    except Exception as e:
+        raise BadRequest(f"圖片轉換 base64 失敗：{e}")
+
 def save_photos(name:str, photo_list: list[str], PHOTO_DIR) -> list[str]:
     """儲存多張 Base64 圖片，回傳每張路徑"""
     os.makedirs(PHOTO_DIR, exist_ok=True)
@@ -60,12 +84,6 @@ def save_photos(name:str, photo_list: list[str], PHOTO_DIR) -> list[str]:
         photos_path.append(file_path)
     return photos_path
 
-def encode_photo_to_base64(path: str) -> str | None:
-    """圖片路徑轉 base64 字串，若不存在回傳 None"""
-    if not path or not os.path.exists(path):
-        return None
-    with open(path, "rb") as f:
-        return base64.b64encode(f.read()).decode("utf-8")
     
 def measure_db_time(func):
     """

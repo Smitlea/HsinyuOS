@@ -14,7 +14,7 @@ from payload import (
     add_usage_payload, add_notice_payload, add_maintenance_payload,
     notice_color_model
 )
-from util import handle_request_exception, save_photos, encode_photo_to_base64
+from util import handle_request_exception, save_photos, encode_photo_to_base64, photo_path_to_base64
 from logger import logging
 
 
@@ -140,9 +140,7 @@ class Crane_detail(Resource):
             threshold = 500 if crane.crane_type == "履帶" else 1000
             alert = total_usage > threshold
 
-            raw = crane.photo or []    
-            photo_list = json.loads(crane.photo) if isinstance(raw, str) else raw
-            base64_photos = [encode_photo_to_base64(photo) for photo in photo_list]
+            base64_photos = photo_path_to_base64(crane.photo)
 
             data = {
                 "id": crane.id,
@@ -153,9 +151,9 @@ class Crane_detail(Resource):
                         "vendor": crane.site.vendor,
                         "location": crane.site.location,
                         "latitude": crane.site.latitude,
-                        "longitude": crane.site.longitude
+                        "longitude": crane.site.longitude,
+                        "photo": base64_photos
                         }if crane.site else None,
-                "photo": base64_photos,
                 "total_usage_hours": total_usage,
                 "alert": alert
             }
@@ -400,27 +398,26 @@ class Create_notice(Resource):
             if not Crane.query.get(crane_id):
                 return {"status": "1", "result": f"找不到 ID 為 {crane_id} 的吊車"}, 404
             
-            notices = CraneNotice.query.filter_by(
-                crane_id=crane_id
-            ).order_by(CraneNotice.notice_date.desc()).all()
+            cutoff_date = datetime.now(tz).date() - timedelta(days=30)
+            
+            notices = CraneNotice.query.filter(
+                CraneNotice.crane_id == crane_id,
+                CraneNotice.notice_date >= cutoff_date
+            ).order_by(CraneUsage.usage_date.desc()).all()
 
             if not notices:
                 return {"status": "1", "result": "此吊車尚無任何通知紀錄"}, 404
             
-
+            
             
             result = list()
             for n in notices:
-                raw = n.photo or []
-                photo_list = json.loads(n.photo) if isinstance(raw, str) else raw
-                base64_photos = [encode_photo_to_base64(photo) for photo in photo_list]
                 result.append({
                     "id": n.id,
                     "notice_date": n.notice_date.isoformat(),
                     "status": n.status,
                     "title": n.title,
                     "description": n.description,
-                    "photo": base64_photos
                 })
             return {"status": "0", "result": result}, 200
 
@@ -468,6 +465,7 @@ class Create_notice(Resource):
                 filename = f"{crane_id}_{notice_date.strftime('%Y%m%d')}"
                 photos_path = save_photos(filename, photo_list, NOTICE_DIR)
                 new_notice.photo = json.dumps(photos_path)
+
             db.session.commit()
             return {"status": "0", "result": "Crane notice created."}, 201
 
@@ -493,13 +491,16 @@ class Notice(Resource):
             notice = CraneNotice.query.get(notice_id)
             if notice is None:
                 return {"status": "1", "result": "找不到指定的注意事項"}, 404
+            
+            base64_photos = photo_path_to_base64(notice.photo)
             data = {
                 "id": notice.id,
                 "crane_id": notice.crane_id,
                 "notice_date": notice.notice_date.isoformat(),
                 "status": notice.status,
                 "title": notice.title,
-                "description": notice.description
+                "description": notice.description,
+                "photo": base64_photos
             }
             return {"status": "0", "result": data}, 200
 
@@ -518,7 +519,9 @@ class Notice(Resource):
         更新單筆 Notice
         """
         try:
-            notice = CraneNotice.query.get_or_404(notice_id)
+            notice = CraneNotice.query.get(notice_id)
+            if notice is None:
+                return {"status": "1", "result": "找不到指定的注意事項"}, 404
             data = api_ns.payload
 
             if 'notice_date' in data and data['notice_date']:
