@@ -24,6 +24,7 @@ logger = logging.getLogger(__file__)
 tz = pytz.timezone('Asia/Taipei')
 PHOTO_DIR = "static/crane_photos"
 NOTICE_DIR = "static/crane_notices"
+MAINTANCE_DIR = "static/crane_maintenances"
 
 
 @api_crane.route('/api/cranes', methods=['GET', 'POST'])
@@ -140,7 +141,7 @@ class Crane_detail(Resource):
             threshold = 500 if crane.crane_type == "履帶" else 1000
             alert = total_usage > threshold
 
-            base64_photos = photo_path_to_base64(crane.photo)
+            base64_photos = photo_path_to_base64(crane.site.photo)
 
             data = {
                 "id": crane.id,
@@ -399,25 +400,29 @@ class Create_notice(Resource):
                 return {"status": "1", "result": f"找不到 ID 為 {crane_id} 的吊車"}, 404
             
             cutoff_date = datetime.now(tz).date() - timedelta(days=30)
+            print(cutoff_date)
             
-            notices = CraneNotice.query.filter(
-                CraneNotice.crane_id == crane_id,
-                CraneNotice.notice_date >= cutoff_date
-            ).order_by(CraneUsage.usage_date.desc()).all()
-
-            if not notices:
-                return {"status": "1", "result": "此吊車尚無任何通知紀錄"}, 404
-            
+            notices = (
+                CraneNotice.query
+                .filter_by(crane_id=crane_id)
+                .filter(CraneNotice.notice_date >= cutoff_date)
+                .order_by(CraneNotice.notice_date.desc())
+                .all()
+            )
             
             
             result = list()
             for n in notices:
+                raw = n.photo or []                     # None → []
+                photo_list = json.loads(raw) if isinstance(raw, str) else raw
+                has_photo = bool(photo_list)  
                 result.append({
                     "id": n.id,
                     "notice_date": n.notice_date.isoformat(),
                     "status": n.status,
                     "title": n.title,
                     "description": n.description,
+                    "has_photo": has_photo
                 })
             return {"status": "0", "result": result}, 200
 
@@ -467,7 +472,7 @@ class Create_notice(Resource):
                 new_notice.photo = json.dumps(photos_path)
 
             db.session.commit()
-            return {"status": "0", "result": "Crane notice created."}, 201
+            return {"status": "0", "result": "吊車注意事項已成功創建."}, 200
 
         except Exception as e:
             error_class = e.__class__.__name__
@@ -533,8 +538,14 @@ class Notice(Resource):
             if 'description' in data:
                 notice.description = data['description']
 
+            if photo_list := data.get("photo"):
+                # 建議把檔名規格化，才不會多次 PUT 造成檔名衝突
+                filename = f"{notice.crane_id}_{notice.notice_date.strftime('%Y%m%d')}"
+                photos_path = save_photos(filename, photo_list, NOTICE_DIR)
+                notice.photo = json.dumps(photos_path)
+
             db.session.commit()
-            return {"status": "0", "result": "Crane notice updated."}, 200
+            return {"status": "0", "result": "注意事項已成功更新"}, 200
 
         except Exception as e:
             error_class = e.__class__.__name__
@@ -603,7 +614,7 @@ class NoticeColorList(Resource):
         return {"status": "0", "result": f"已新增 {status_name} → {color}"}, 201
 
 # -----------------------------------
-#  Maintenance (CraneMaintenance) 相關 API
+#  Maintenance (CraneMaintenance) GET/POST API
 # -----------------------------------
 @api_test.route('/api/cranes/<int:crane_id>/maintenances', methods=['GET', 'POST'])
 class Create_maintenance(Resource):
@@ -626,17 +637,27 @@ class Create_maintenance(Resource):
             if crane is None:
                 return {"status": "1", "result": f"找不到 ID 為 {crane_id} 的吊車"}, 404
 
-            maintenances = CraneMaintenance.query.filter_by(
-                crane_id=crane_id
-            ).order_by(CraneMaintenance.maintenance_date.desc()).all()
+            maintenances = (
+                CraneMaintenance.query
+                .filter(
+                    CraneMaintenance.crane_id == crane_id,
+                    CraneMaintenance.is_deleted == False
+                )
+                .order_by(CraneMaintenance.maintenance_date.desc())
+                .all()
+            )
+
             result = []
             for m in maintenances:
+                raw = m.photo or []                      # None → []
+                photo_list = json.loads(raw) if isinstance(raw, str) else raw
                 record = {
                     "id":               m.id,
                     "maintenance_date": m.maintenance_date.isoformat(),
                     "title":            m.title,
                     "note":             m.note,
                     "material":         m.material,
+                    "has_photo":        bool(photo_list)
                 }
                 if user.permission == 2:          # 最高權限看全部
                     record.update({
@@ -670,10 +691,10 @@ class Create_maintenance(Resource):
                 return {"status": "1", "result": "使用者權限不足"}, 403
 
             data = api_ns.payload
-            maintenance_date = data.get('maintenance_date')
             title    = data.get("title")
             note     = data.get("note")
             material = data.get("material")
+            
             if not title:
                 return {"status": 1, "result": "缺少標題"}, 400
 
@@ -708,8 +729,13 @@ class Create_maintenance(Resource):
                 maintenance.parts_cost    = data.get("parts_cost")
 
             db.session.add(maintenance)
-            db.session.commit()
+            db.session.flush()
 
+            if photo_list := data.get("photo"): 
+                photos_path = save_photos(title, photo_list, MAINTANCE_DIR)
+                maintenance.photo = json.dumps(photos_path)
+
+            db.session.commit()
             return {"status": "0", "result": "拖車維修紀錄已成功創建"}, 200
 
         except Exception as e:
@@ -747,6 +773,7 @@ class Maintenance(Resource):
                 "id": m.id,
                 "crane_id": m.crane_id,
                 "maintenance_date": m.maintenance_date.isoformat(),
+                "photo": photo_path_to_base64(m.photo) if m.photo else None,
             }
             if permission == 2:      # 最高權限補全敏感欄位
                 data.update({
@@ -775,34 +802,42 @@ class Maintenance(Resource):
             user = User.query.get(get_jwt_identity())
             if user is None:
                 return {"status": "1", "result": "使用者不存在"}, 403
-            if user.permission == 0:
+            elif user.permission == 0:
                 return {"status": 1, "result": "使用者權限不足"}, 403
+            
+            
 
-            m = CraneMaintenance.query.get(maintenance_id)
-            if m is None:
+            maintaince = CraneMaintenance.query.get(maintenance_id)
+            if maintaince is None:
                 return {"status": "1", "result": "找不到指定的維修記錄"}, 404
             data = api_ns.payload or {}
 
             if 'maintenance_date' in data and data['maintenance_date']:
                 try:
-                    m.maintenance_date = datetime.strptime(
+                    maintaince.maintenance_date = datetime.strptime(
                         data["maintenance_date"], "%Y-%m-%d"
                     ).date()
                 except ValueError:
-                    return {"status": 1, "result": "maintenance_date 格式錯誤"}, 400
+                    return {"status": 1, "result": "maintenance_日期格式錯誤 YYYY-MM-DD"}, 400
+                
             # 基礎欄位（中以上皆可改）
             for k in ("title", "note", "material"):
                 if k in data:
-                    setattr(m, k, data[k])
+                    setattr(maintaince, k, data[k])
+
+            if photo_list := data.get("photo"): 
+                photos_path = save_photos(maintaince.title, photo_list, MAINTANCE_DIR)
+                maintaince.photo = json.dumps(photos_path)
+
+
+
             # 最高權限才能改敏感欄位
             if user.permission == 2:
                 for k in ("vendor", "vendor_cost", "parts_vendor", "parts_cost"):
                     if k in data:
-                        setattr(m, k, data[k])
-            else:
-                # 若中權限硬塞敏感欄位 → 拒絕
-                if any(data.get(x) is not None for x in ("vendor", "vendor_cost", "parts_vendor", "parts_cost")):
-                    return {"status": 1, "result": "中/低權限不得修改金額或廠商欄位"}, 403
+                        setattr(maintaince, k, data[k])
+            elif any(data.get(x) is not None for x in ("vendor", "vendor_cost", "parts_vendor", "parts_cost")):
+                return {"status": 1, "result": "中/低權限不得修改金額或廠商欄位"}, 403
 
             db.session.commit()
             return {"status": "0", "result": "吊車維修紀錄已成功更新"}, 200

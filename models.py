@@ -74,18 +74,21 @@ class ConstructionSite(BaseTable):
             "latitude": self.latitude,
             "longitude": self.longitude,
             "created_at": self.created_at,
+            "has_photo": False
         }
-        if include_photo and self.photo:
-            try:
-                paths = json.loads(self.photo)
-                data["photo"] = [
-                    f"data:image/jpeg;base64,{encode_photo_to_base64(p)}"
-                    for p in paths if encode_photo_to_base64(p)
-                ]
-            except Exception as e:
-                data["photo"] = []
-        return data
+        paths = json.loads(self.photo) if self.photo else []
+        if not isinstance(paths, list):
+            raise ValueError("photo 欄位不是 list 格式")
 
+        data["has_photo"] = bool(paths)
+
+        if include_photo and data["has_photo"]:
+            data["photo"] = [
+                f"data:image/jpeg;base64,{encode_photo_to_base64(p)}"
+                for p in paths if encode_photo_to_base64(p)
+            ]
+
+        return data
 
 
 # ------------ Crane ←→ ConstructionSite ------------ #
@@ -172,6 +175,7 @@ class CraneMaintenance(BaseTable):
     title    = db.Column(db.String(128), nullable=False)      # 標題
     note     = db.Column(db.Text,        nullable=True)       # 備註
     material = db.Column(db.String(128), nullable=True)       # 使用材料
+    photo = db.Column(LONGTEXT, nullable=True)  
 
     vendor         = db.Column(db.String(128))
     vendor_cost    = db.Column(db.Numeric(12, 2))

@@ -128,6 +128,7 @@ add_maintenance_payload = api_ns.model(
         "title":    fields.String(required=True,  example="更換液壓油"),
         "note":     fields.String(required=False, example="定期保養"),
         "material": fields.String(required=False, example="液壓油 20L"),
+        "photo": fields.List(fields.String(description="Base64 編碼圖檔"), max_items=5, required=False),
         # 進階欄位：文件上標 Optional，實際由程式面控制
         "vendor":       fields.String(example="維修達人有限公司"),
         "vendor_cost":  fields.Float(example=12000),
@@ -200,6 +201,7 @@ site_item_payload = api_ns.model(
         "longitude": fields.Float,   
         "note": fields.String,
         "created_at": fields.String,
+        "has_photo": fields.Boolean
     },
 )
 
