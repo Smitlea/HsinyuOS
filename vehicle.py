@@ -14,7 +14,11 @@ from payload import (
     add_usage_payload, add_notice_payload, add_maintenance_payload,
     notice_color_model
 )
-from util import handle_request_exception, save_photos, encode_photo_to_base64, photo_path_to_base64
+from util import (
+    handle_request_exception, save_photos, 
+    photo_path_to_base64, delete_photo_file
+
+)
 from logger import logging
 
 
@@ -86,11 +90,11 @@ class Create_crane(Resource):
                 return {"status": 1, "result": "使用者不存在" if not user else "使用者權限不足"}, 403
 
 
-            # ---------- 2. 商業邏輯：同車號不能重覆 ----------
+            # ---------- 1. 同車號不能重覆 ----------
             if Crane.query.filter_by(crane_number=crane_number).first():
                 return {"status": 1, "result": "吊車車號已存在"}, 409
             
-            # -------- 3. 查工地 --------
+            # -------- 2. 查工地 --------
             site = ConstructionSite.query.get(site_id)
             if not site:
                 return {"status": 1, "result": "找不到工地"}, 404
@@ -181,22 +185,22 @@ class Crane_detail(Resource):
             new_site_id = data.get("site_id")
 
              # ---------- 1. 驗證使用者 ----------
-            user = User.query.get(get_jwt_identity())
-            if not user or user.permission < 1:
-                return {
-                    "status": 1, "result": "使用者不存在" if not user else "使用者權限不足"
-                }, 403
-            # ---------- 2. 驗證 crane_number 是否重複 ----------
+            # user = User.query.get(get_jwt_identity())
+            # if not user or user.permission < 1:
+            #     return {
+            #         "status": 1, "result": "使用者不存在" if not user else "使用者權限不足"
+            #     }, 403
+            # ---------- 1. 驗證 crane_number 是否重複 ----------
             if new_crane_number and new_crane_number != crane.crane_number:
                 if Crane.query.filter_by(crane_number=new_crane_number).first():
                     return {"status": 1, "result": "吊車車號已存在"}, 409
                 crane.crane_number = new_crane_number
 
-             # ---------- 3. 更新基本欄位 ----------
+             # ---------- 2. 更新基本欄位 ----------
             crane.crane_type = data.get('crane_type', crane.crane_type)
             crane.initial_hours = data.get('initial_hours', crane.initial_hours)
 
-            # ---------- 4. 更新工地資訊與位置 ----------
+            # ---------- 3. 更新工地資訊與位置 ----------
             if new_site_id:
                 site = ConstructionSite.query.get(new_site_id)
                 if not site:
@@ -205,7 +209,7 @@ class Crane_detail(Resource):
             crane.latitude = data.get("latitude", crane.latitude)
             crane.longitude = data.get("longitude", crane.longitude)
 
-            # ---------- 5. 更新圖片 ----------
+            # ---------- 4. 更新圖片 ----------
             if photo_list := data.get("photo"):
                 photos_path = save_photos(crane.crane_number, photo_list, PHOTO_DIR)
                 crane.photo = json.dumps(photos_path)
@@ -243,10 +247,8 @@ class Create_usage(Resource):
             if crane is None:
                 return {"status": "1", "result": "找不到指定吊車"}, 404
             
-            cutoff_date = datetime.now(tz).date() - timedelta(days=30)
             usages = CraneUsage.query.filter(
                 CraneUsage.crane_id == crane_id,
-                CraneUsage.usage_date >= cutoff_date
             ).order_by(CraneUsage.usage_date.desc()).all()
             result = []
             for u in usages:
@@ -277,7 +279,9 @@ class Create_usage(Resource):
             daily_hours = data.get('daily_hours', 8)
 
             # 如要檢查使用者權限
-            user = User.query.get_or_404(get_jwt_identity())
+            user = User.query.get(get_jwt_identity())
+            if user is None:
+                return {"status": "1", "result": "使用者不存在"}, 403
             if user.permission < 0:
                 return {"status": "1", "result": "使用者權限不足"}
 
@@ -367,7 +371,9 @@ class Usage(Resource):
         刪除單筆使用紀錄
         """
         try:
-            usage = CraneUsage.query.get_or_404(usage_id)
+            usage = CraneUsage.query.get(usage_id)
+            if usage is None:
+                return {"status": "1", "result": "找不到指定的使用紀錄"}, 404
             db.session.delete(usage)
             db.session.commit()
             return {"status": "0", "result": "Usage record deleted."}, 200
@@ -461,7 +467,9 @@ class Create_notice(Resource):
                 notice_date=notice_date,
                 status=status,
                 title=title,
-                description=description
+                description=description,
+                created_by=user.id,
+                updated_by=user.id
             )
             db.session.add(new_notice)
             db.session.commit()
@@ -527,6 +535,8 @@ class Notice(Resource):
             notice = CraneNotice.query.get(notice_id)
             if notice is None:
                 return {"status": "1", "result": "找不到指定的注意事項"}, 404
+            user = User.query.get(get_jwt_identity())
+            notice.updated_by = user.id
             data = api_ns.payload
 
             if 'notice_date' in data and data['notice_date']:
@@ -563,7 +573,16 @@ class Notice(Resource):
             notice = CraneNotice.query.get(notice_id)
             if notice is None:
                 return {"status": "1", "result": "找不到指定的注意事項"}, 404
-            db.session.delete(notice)
+            user = User.query.get(get_jwt_identity())
+            if user.permission < 2:
+                return {"status": "1", "result": "使用者權限不足"}, 403
+            notice.is_deleted = True
+            notice.updated_by = user.id
+
+            # 如果有照片，則刪除照片檔案
+            if notice.photo:
+                delete_photo_file(notice.photo, NOTICE_DIR)
+            
             db.session.commit()
             return {"status": "0", "result": "Crane notice deleted."}, 200
 
@@ -860,13 +879,16 @@ class Maintenance(Resource):
                 return {"status": "1", "result": "使用者不存在"}, 403
             if user.permission < 2:
                 return {"status": 1, "result": "使用者權限不足"}, 403
-            m = CraneMaintenance.query.get(maintenance_id)
-            if m is None:
+            maintaince = CraneMaintenance.query.get(maintenance_id)
+            if maintaince is None:
                 return {"status": "1", "result": "找不到指定的維修記錄"}, 404
+            # 如果有照片，則刪除照片檔案
+            if maintaince.photo:
+                delete_photo_file(maintaince.photo, MAINTANCE_DIR)
             
-            m.is_deleted = True
+            maintaince.is_deleted = True
             db.session.commit()
-            return{"status": "0", "result": "Crane maintenance record deleted."}, 200
+            return{"status": "0", "result": "吊車的維修紀錄已成功刪除"}, 200
 
         except Exception as e:
             error_class = e.__class__.__name__

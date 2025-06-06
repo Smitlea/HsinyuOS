@@ -194,10 +194,10 @@ class Check(Resource):
 
 @api_ns.route("/api/refresh", methods=["POST"])
 class Refresh(Resource):
+    @jwt_required(refresh=True)
     @handle_request_exception
     @api.expect(refresh_input_payload)
     @api.marshal_with(login_output_payload)
-    @jwt_required(refresh=True)
     def post(self):
         try:
             current_user = get_jwt_identity()

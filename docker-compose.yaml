@@ -2,7 +2,7 @@
 services:
   mariadb:
     image: mariadb
-    container_name: mariadb_test
+    container_name: mariadb-container
     restart: always
     environment:
       MYSQL_ROOT_PASSWORD: a!y2w4
@@ -13,13 +13,7 @@ services:
       - mariadb_data:/var/lib/mysql
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
-      - "3310:3306"
-
-  redis:
-      image: redis
-      command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
-      ports:
-        - "6379:6379"
+      - "3306:3306"
 
 volumes:
   mariadb_data:
