@@ -8,7 +8,7 @@ from flask_jwt_extended import (
     JWTManager, create_access_token, jwt_required, get_jwt_identity, create_refresh_token
 )
 from sqlalchemy import inspect      
-from payload import (
+from static.payload import (
     api_ns, api, app,
     refresh_input_payload,
     login_output_payload,
@@ -19,12 +19,14 @@ from payload import (
 )
 from flask_bcrypt import Bcrypt
 from flask_restx import Resource
+from flask_cors import CORS
 
-from vehicle import *
-from location import *
-from models import db, User
-from logger import logging
-from util import handle_request_exception
+from function.vehicle import *
+from function.record import *
+from function.location import *
+from static.models import db, User
+from static.logger import logging
+from static.util import handle_request_exception
 
 bcrypt = Bcrypt()
 logger = logging.getLogger(__file__)
@@ -44,6 +46,8 @@ app.config["PROPAGATE_EXCEPTIONS"] = True
 app.config['API_KEY']= os.environ.get('API_SECRET_KEY')
 app.config['CACHE_TYPE'] = 'RedisCache'
 app.config['CACHE_REDIS_URL'] = os.getenv('REDIS_URL')
+CORS(app, origins=["http://localhost:3000"], supports_credentials=True)
+
 
 # ─────────────────────────────────────────────────────────────
 # 初始建表＋預設資料
@@ -254,4 +258,4 @@ def handle_invalid_token(jwt_header, jwt_payload):
 #     users = db.session.execute(db.select(User).order_by(User.username)).scalars()
 
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    app.run(host="0.0.0.0", port=5050, debug=True)

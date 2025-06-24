@@ -1,9 +1,9 @@
-from payload import api, api_ns, leave_payload, general_output_payload
+from static.payload import api, api_ns, leave_payload, general_output_payload
 from flask_restx import Resource
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from models import db, User, Leave
-from util import handle_request_exception
-from logger import logging
+from static.models import db, User, Leave
+from static.util import handle_request_exception
+from static.logger import logging
 
 logger = logging.getLogger(__file__)
 

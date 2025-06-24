@@ -6,14 +6,14 @@ import json
 
 from flask_restx import Resource
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from models import db, ConstructionSite, User
-from payload import (
+from static.models import db, ConstructionSite, User
+from static.payload import (
     api_ns, general_output_payload, site_input_payload, site_output_payload, site_list_output
 )
 from werkzeug.exceptions import BadRequest
-from util import *
-from payload import api
-from logger import logging
+from static.util import *
+from static.payload import api
+from static.logger import logging
 
 logger = logging.getLogger(__file__)
 PHOTO_DIR = "static/site_photos"

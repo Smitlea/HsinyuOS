@@ -6,23 +6,23 @@ import pytz
 from flask_restx import Resource
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from sqlalchemy.orm import joinedload
-from models import db, Crane, User, CraneUsage, CraneNotice, CraneMaintenance, ConstructionSite, NoticeColor
+from static.models import db, Crane, User, CraneUsage, CraneNotice, CraneMaintenance, ConstructionSite, NoticeColor
 
-from payload import (
+from static.payload import (
     api_ns, api_crane, api_test, api_notice,
     add_crane_payload, general_output_payload,
     add_usage_payload, add_notice_payload, add_maintenance_payload,
     notice_color_model
 )
-from util import (
+from static.util import (
     handle_request_exception, save_photos, 
     photo_path_to_base64, delete_photo_file
 
 )
-from logger import logging
+from static.logger import logging
 
 
-from payload import api
+from static.payload import api
 logger = logging.getLogger(__file__)
 
 tz = pytz.timezone('Asia/Taipei')
