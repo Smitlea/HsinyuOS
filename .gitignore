@@ -1,5 +1,7 @@
 .env
-static/
+static/crane_notices/
+static/crane_photos/
+static/site_photos/
 Pipfile
 test.py
 docker-compose.yaml
