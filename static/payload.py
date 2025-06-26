@@ -228,4 +228,27 @@ site_list_output = api_ns.model(
     },
 )
 
+# ─── 使用者暱稱清單 ─────────────────────
+username_output = api_ns.model(
+    "UsernameItem",
+    {
+        "id": fields.Integer(example=3),
+        "username": fields.String(example="smitlea"),
+    },
+)
 
+work_record_input_payload = api_ns.model(
+    "WorkRecordInput",
+    {
+        "record_date": fields.String(required=False, description="紀錄日期", example="2025-06-26"),
+        "vendor": fields.String(required=True, description="供應商名稱", example="大林營造"),
+        "qty_120": fields.Integer(default=0, description="120噸吊車數量"),
+        "qty_200": fields.Integer(default=0, description="200噸吊車數量"),
+        "assistants": fields.List(
+            fields.String,
+            default=[],
+            description="協助人員列表",
+            example=["杰克", "gary", "微笑"]
+        )
+    }
+)

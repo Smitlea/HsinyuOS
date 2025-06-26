@@ -26,7 +26,6 @@ class BaseTable(db.Model):
     __table_args__ = {"mysql_charset": "utf8mb4"}
 
     id           = db.Column(db.Integer, primary_key=True)
-    recorded_at  = db.Column(db.TIMESTAMP, server_default=db.func.now(), nullable=False)
     created_at = db.Column(db.DateTime(timezone=True), default=UTC8)
     updated_at = db.Column(db.DateTime(timezone=True), default=UTC8, onupdate=UTC8)
 
@@ -235,7 +234,6 @@ class DailyTask(BaseTable):
     crane_id = db.Column(db.Integer,     db.ForeignKey("cranes.id"))
     created_by = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
     updated_by = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
-
     is_deleted = db.Column(db.Boolean, default=False, nullable=False)
 
     site  = db.relationship("ConstructionSite", backref=db.backref("daily_tasks", cascade="all, delete-orphan"))
@@ -253,7 +251,7 @@ class TaskMaintenance(BaseTable):
 
 class WorkRecord(BaseTable):
     """
-    怪手機工作紀錄（第二項）
+    怪手工作紀錄（第二項）
     ─ vendor        : 廠商（字串）
     ─ qty_120 / 200 : 出勤台數（整數，可為 0）
     ─ assistants    : 4 人以內的 user.id 陣列，JSON 儲存
@@ -264,9 +262,10 @@ class WorkRecord(BaseTable):
     vendor      = db.Column(db.String(100), nullable=False)
     qty_120     = db.Column(db.Integer, default=0, nullable=False)
     qty_200     = db.Column(db.Integer, default=0, nullable=False)
-    assistants  = db.Column(db.Text, nullable=True)     # json list<int>
+    assistants   = db.Column(db.JSON) 
 
     created_by  = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    update_by   = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
     is_deleted  = db.Column(db.Boolean, default=False, nullable=False)
 
     def to_dict(self):
@@ -276,9 +275,9 @@ class WorkRecord(BaseTable):
             "vendor": self.vendor,
             "qty_120": self.qty_120,
             "qty_200": self.qty_200,
-            "assistants": json.loads(self.assistants or "[]"),
-            "created_by": self.created_by,
+            "assistants": self.assistants if self.assistants else [],
         }
+    
 if __name__ == "__main__":
     dotenv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
 

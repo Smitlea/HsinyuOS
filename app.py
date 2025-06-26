@@ -15,7 +15,8 @@ from static.payload import (
     general_output_payload,
     register_payload,
     forgot_password_payload,
-    login_payload
+    login_payload,
+    username_output
 )
 from flask_bcrypt import Bcrypt
 from flask_restx import Resource
@@ -166,6 +167,32 @@ class ForgotPassword(Resource):
             logger.warning(f"Forgot PW Error: [{error_class}] detail: {detail}")
             return {'status': 1, 'result': str(e), "error": detail}
 
+
+@api_ns.route("/api/usernames")
+class UsernameListResource(Resource):
+
+    @api_ns.doc(description="取得所有使用者 id 與 username（下拉式選單用）")
+    @api_ns.marshal_list_with(username_output)     # 自動把 namedtuple → dict
+    @handle_request_exception                      # ← 你現有的錯誤包裝裝飾器
+    # @jwt_required()  # 若前端只有登入後才能拿清單，再打開
+    def get(self):
+        """
+        GET /api/usernames
+        回傳格式：
+        [
+            {"id": 1, "username": "allen"},
+            {"id": 2, "username": "gary"},
+            ...
+        ]
+        """
+        users = (
+            db.session
+            .query(User.id, User.username)
+            .order_by(User.username.asc())      
+            .all()
+        )
+        logger.info("Username list requested: %d rows", len(users))
+        return users, 200
 
 @api_ns.route('/api/test', methods=['GET'])
 class Test(Resource):

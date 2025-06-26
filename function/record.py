@@ -5,17 +5,14 @@ import pytz
 from flask import request
 from flask_restx import Resource
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from static.models import db, Crane, User, DailyTask, TaskMaintenance, ConstructionSite, CraneAssignment
+from static.models import db, Crane, User, DailyTask, WorkRecord, TaskMaintenance, ConstructionSite, CraneAssignment
 
 from static.payload import (
     api_ns, api, api_crane, api_test, api_notice, add_task_payload,
-    general_output_payload, add_task_maint_payload
+    general_output_payload, add_task_maint_payload, work_record_input_payload
 )
-from static.util import (
-    handle_request_exception, save_photos, 
-    photo_path_to_base64, delete_photo_file
+from static.util import handle_request_exception
 
-)
 from static.logger import logging
 
 logger = logging.getLogger(__file__)
@@ -300,6 +297,174 @@ class TaskMaintenanceList(Resource):
         db.session.add(m)
         db.session.commit()
         return {"status": "0", "result": "成功創建保養紀錄"}, 201
+    
+@api_ns.route("/api/extravtory-workrecord", methods=["GET", "POST"])
+class ExtravtoryWorkRecord(Resource):
+    """
+    怪手工作紀錄列表與新增
+    GET 取得工作紀錄列表
+    POST 新增一筆工作紀錄
+    """
+    @jwt_required()
+    @handle_request_exception
+    def get(self):
+        """
+        回傳工作紀錄列表
+        """
+        records = WorkRecord.query.filter_by(is_deleted=False).order_by(WorkRecord.record_date.desc()).all()
+        result = []
+
+        for r in records:
+            result.append({
+                "id": r.id,
+                "record_date": r.record_date.isoformat(),
+                "vendor": r.vendor,
+                "qty_120": r.qty_120,
+                "qty_200": r.qty_200,
+                "assistants": r.assistants,
+            })
+        return {"status": "0", "result": result}, 200
+
+    @jwt_required()
+    @handle_request_exception
+    @api_ns.expect(work_record_input_payload)
+    def post(self):
+        """
+        新增一筆工作紀錄
+        """
+        data = request.json
+        # 權限驗證
+        user = User.query.get(get_jwt_identity())
+        if not user:
+            return {"status": 1, "result": "使用者不存在"}, 403
+
+        # 驗證輸入
+        vendor = data.get("vendor")
+        if not vendor:
+            return {"status": 1, "result": "缺乏廠商欄位"}, 400
+        try:
+            qty_120 = int(data.get("qty_120", 0))
+            qty_200 = int(data.get("qty_200", 0))
+            assert qty_120 >= 0 and qty_200 >= 0
+        except (ValueError, AssertionError):
+            return {"status": 1, "result": "qty_120 / qty_200 必須為非負整數"}, 40
+        
+        # or not all(isinstance(a, int) for a in assistants)
+        assistants = data.get("assistants", [])
+        if len(assistants) > 4:
+            return {"status": 1, "result": "輔助人員不能超過4個或是非user.id'數字'陣列型態"}, 400
+
+        # 日期處理
+        try:
+            record_date = datetime.strptime(
+                data.get("record_date") or datetime.now(tz).strftime("%Y-%m-%d"),
+                "%Y-%m-%d"
+            ).date()
+        except ValueError:
+            return {"status": 1, "result": "record_date 格式錯誤，須 YYYY-MM-DD"}, 400
+
+        # 新增工作紀錄
+        record = WorkRecord(
+            record_date=record_date,
+            vendor=vendor,
+            qty_120=qty_120,
+            qty_200=qty_200,
+            assistants=assistants,  
+            created_by=user.id
+        )
+        db.session.add(record)
+        db.session.commit()
+        return {"status": "0", "result": "工作紀錄已成功新增"}, 200
+    
+# ---------------------------------------
+#  單筆 Work-Record  CRUD
+# ---------------------------------------
+@api_ns.route("/api/extravtory-workrecord/<int:record_id>", methods=["GET", "PUT", "DELETE"])
+class WorkRecordDetail(Resource):
+    """怪手工作紀錄 – 單筆 CRUD"""
+
+    # ─────────────────────────────── GET
+    @jwt_required()
+    @handle_request_exception
+    def get(self, record_id):
+        record = WorkRecord.query.filter_by(id=record_id, is_deleted=False).first()
+        if not record:
+            return {"status": 1, "result": "找不到工作紀錄"}, 404
+
+        return {"status": "0", "result": record.to_dict()}, 200
+
+    # ─────────────────────────────── PUT
+    @jwt_required()
+    @handle_request_exception
+    @api_ns.expect(work_record_input_payload)
+    @api_ns.marshal_with(general_output_payload)
+    def put(self, record_id):
+        data = request.json
+        record = WorkRecord.query.filter_by(id=record_id, is_deleted=False).first()
+        if not record:
+            return {"status": 1, "result": "找不到工作紀錄"}, 404
+
+        # 權限驗證
+        user = User.query.get(get_jwt_identity())
+        if not user:
+            return {"status": 1, "result": "使用者不存在"}, 403
+
+        # ─────── 驗證與轉型 ───────
+        vendor = data.get("vendor")
+        if not vendor:
+            return {"status": 1, "result": "缺乏廠商欄位"}, 400
+
+        try:
+            qty_120 = int(data.get("qty_120", 0))
+            qty_200 = int(data.get("qty_200", 0))
+            assert qty_120 >= 0 and qty_200 >= 0
+        except (ValueError, AssertionError):
+            return {"status": 1, "result": "qty_120 / qty_200 必須為非負整數"}, 400
+
+        assistants = data.get("assistants", [])
+        if len(assistants) > 4:
+            return {"status": 1, "result": "輔助人員不能超過 4 個"}, 400
+
+        try:
+            record_date = datetime.strptime(
+                data.get("record_date") or datetime.now(tz).strftime("%Y-%m-%d"),
+                "%Y-%m-%d"
+            ).date()
+        except ValueError:
+            return {"status": 1, "result": "record_date 格式錯誤，須 YYYY-MM-DD"}, 400
+
+        # ─────── 更新欄位 ───────
+        record.record_date = record_date
+        record.vendor      = vendor
+        record.qty_120     = qty_120
+        record.qty_200     = qty_200
+        record.assistants  = assistants
+        record.update_by   = user.id
+
+        db.session.commit()
+        return {"status": "0", "result": "工作紀錄成功更新"}, 200
+
+    # ──────────────────────────── DELETE
+    @jwt_required()
+    @handle_request_exception
+    @api_ns.marshal_with(general_output_payload)
+    def delete(self, record_id):
+        record = WorkRecord.query.filter_by(id=record_id, is_deleted=False).first()
+        if not record:
+            return {"status": 1, "result": "找不到工作紀錄"}, 404
+
+        user = User.query.get(get_jwt_identity())
+        if not user:
+            return {"status": 1, "result": "使用者不存在"}, 403
+        if user.permission < 0:
+            return {"status": 1, "result": "權限不足，無法刪除"}, 403
+
+        # 軟刪除
+        record.is_deleted = True
+        record.update_by  = user.id
+        db.session.commit()
+        return {"status": "0", "result": "工作紀錄已成功刪除"}, 200
+
     
 
 @api_ns.route("/api/available-cranes")
