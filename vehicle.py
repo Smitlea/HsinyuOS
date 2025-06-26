@@ -405,13 +405,12 @@ class Create_notice(Resource):
             if not Crane.query.get(crane_id):
                 return {"status": "1", "result": f"找不到 ID 為 {crane_id} 的吊車"}, 404
             
-            cutoff_date = datetime.now(tz).date() - timedelta(days=30)
-            print(cutoff_date)
+            # cutoff_date = datetime.now(tz).date() - timedelta(days=30)
             
             notices = (
                 CraneNotice.query
                 .filter_by(crane_id=crane_id)
-                .filter(CraneNotice.notice_date >= cutoff_date)
+                # .filter(CraneNotice.notice_date >= cutoff_date)
                 .order_by(CraneNotice.notice_date.desc())
                 .all()
             )
@@ -468,8 +467,8 @@ class Create_notice(Resource):
                 status=status,
                 title=title,
                 description=description,
-                created_by=user.id,
-                updated_by=user.id
+                # created_by=user.id,
+                # updated_by=user.id
             )
             db.session.add(new_notice)
             db.session.commit()
@@ -576,9 +575,9 @@ class Notice(Resource):
             user = User.query.get(get_jwt_identity())
             if user.permission < 2:
                 return {"status": "1", "result": "使用者權限不足"}, 403
-            notice.is_deleted = True
-            notice.updated_by = user.id
-
+            # notice.is_deleted = True
+            # notice.updated_by = user.id
+            db.session.delete(notice)
             # 如果有照片，則刪除照片檔案
             if notice.photo:
                 delete_photo_file(notice.photo, NOTICE_DIR)
@@ -706,9 +705,7 @@ class Create_maintenance(Resource):
             user = User.query.get(get_jwt_identity())
             if user is None:
                 return {"status": "1", "result": "使用者不存在"}, 403
-            elif user.permission == 0:
-                return {"status": "1", "result": "使用者權限不足"}, 403
-
+            
             data = api_ns.payload
             title    = data.get("title")
             note     = data.get("note")
@@ -886,7 +883,9 @@ class Maintenance(Resource):
             if maintaince.photo:
                 delete_photo_file(maintaince.photo, MAINTANCE_DIR)
             
-            maintaince.is_deleted = True
+            # maintaince.is_deleted = True
+            # maintaince.updated_by = user.id
+            db.session.delete(maintaince)
             db.session.commit()
             return{"status": "0", "result": "吊車的維修紀錄已成功刪除"}, 200
 
