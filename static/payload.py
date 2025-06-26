@@ -109,6 +109,20 @@ add_notice_payload = api_ns.model(
     }
 )
 
+add_task_payload = api_ns.model("AddDailyTask", {
+    "task_date":   fields.String(description="YYYY-MM-DD，預設今天"),
+    "vendor":      fields.String(required=True),
+    "site_id":     fields.String(required=True),       # 或 site_location 字串二擇一
+    "crane_number":fields.String(required=True),       # 由程式轉成 crane_id
+    "work_time":   fields.String(required=True, example="08:00-17:00"),
+    "note":        fields.String,
+})
+
+add_task_maint_payload = api_ns.model("AddTaskMaintenance", {
+    "maintenance_date": fields.String(description="YYYY-MM-DD，預設今天"),
+    "description":      fields.String(required=True),
+})
+
 # 新增維修記錄
 notice_color_model = api.model(
     "NoticeColor",
@@ -191,6 +205,7 @@ site_output_payload = api_ns.model(
         )
     }
 )
+
 site_item_payload = api_ns.model(
     "工地",
     {

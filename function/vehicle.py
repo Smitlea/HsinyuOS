@@ -9,7 +9,7 @@ from sqlalchemy.orm import joinedload
 from static.models import db, Crane, User, CraneUsage, CraneNotice, CraneMaintenance, ConstructionSite, NoticeColor
 
 from static.payload import (
-    api_ns, api_crane, api_test, api_notice,
+    api_ns, api, api_crane, api_test, api_notice,
     add_crane_payload, general_output_payload,
     add_usage_payload, add_notice_payload, add_maintenance_payload,
     notice_color_model
@@ -21,8 +21,6 @@ from static.util import (
 )
 from static.logger import logging
 
-
-from static.payload import api
 logger = logging.getLogger(__file__)
 
 tz = pytz.timezone('Asia/Taipei')

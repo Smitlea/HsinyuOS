@@ -18,6 +18,8 @@ bcrypt = Bcrypt()
 db = SQLAlchemy()
 tz = pytz.timezone('Asia/Taipei')
  
+def UTC8():
+    return datetime.datetime.now(tz)
 
 class BaseTable(db.Model):
     __abstract__ = True
@@ -25,8 +27,8 @@ class BaseTable(db.Model):
 
     id           = db.Column(db.Integer, primary_key=True)
     recorded_at  = db.Column(db.TIMESTAMP, server_default=db.func.now(), nullable=False)
-    created_at   = db.Column(db.DateTime(timezone=True), default=db.func.now())
-    updated_at   = db.Column(db.DateTime(timezone=True), default=db.func.now(), onupdate=db.func.now())
+    created_at = db.Column(db.DateTime(timezone=True), default=UTC8)
+    updated_at = db.Column(db.DateTime(timezone=True), default=UTC8, onupdate=UTC8)
 
 
 class User(BaseTable):
@@ -196,7 +198,6 @@ class CraneMaintenance(BaseTable):
 # ------------ Crane / ConstructionSite ←→ CraneAssignment ------------ #
 class CraneAssignment(BaseTable):
     __tablename__ = "crane_assignments"          
-    id         = db.Column(db.Integer, primary_key=True)
     crane_id   = db.Column(db.Integer, db.ForeignKey("cranes.id"))   
     site_id    = db.Column(db.String(36), db.ForeignKey("construction_site.id"))
     start_date = db.Column(db.Date, default=datetime.date.today)
@@ -205,6 +206,50 @@ class CraneAssignment(BaseTable):
     # optional：建立雙向關聯
     crane = db.relationship("Crane", backref=db.backref("assignments", cascade="all, delete-orphan"))
     site  = db.relationship("ConstructionSite", backref=db.backref("assignments", cascade="all, delete-orphan"))
+
+    __table_args__ = (
+        # 同一台吊車派同一天不得重疊（簡化版；如需跨區間完整重疊檢查靠程式驗證）
+        db.Index("uq_crane_date", "crane_id", "start_date", unique=False),
+    )
+    def covers(self, target_date: datetime.date) -> bool:
+        return (self.start_date <= target_date and
+                (self.end_date is None or self.end_date >= target_date))
+    
+class DailyTask(BaseTable):
+    """
+    每日任務紀錄
+    ─ vendor      : 廠商名稱
+    ─ site_id     : 對應 ConstructionSite.id
+    ─ crane_id    : 對應 Crane.id（車號）
+    ─ work_time   : 工作時間字串（ex: "7.5"
+    ─ note        : 備註
+    """
+    __tablename__ = "daily_tasks"
+
+    task_date  = db.Column(db.Date, default=datetime.date.today, nullable=False)
+    vendor     = db.Column(db.String(100), nullable=False)
+    work_time  = db.Column(db.Float,  nullable=False)
+    note       = db.Column(db.Text,        nullable=True)
+
+    site_id  = db.Column(db.String(36), db.ForeignKey("construction_site.id"))
+    crane_id = db.Column(db.Integer,     db.ForeignKey("cranes.id"))
+    created_by = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    updated_by = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+
+    is_deleted = db.Column(db.Boolean, default=False, nullable=False)
+
+    site  = db.relationship("ConstructionSite", backref=db.backref("daily_tasks", cascade="all, delete-orphan"))
+    crane = db.relationship("Crane",            backref=db.backref("daily_tasks", cascade="all, delete-orphan"))
+
+class TaskMaintenance(BaseTable):
+    """
+    簡易保養紀錄 —— 僅描述字串 + 日期
+    """
+    __tablename__ = "task_maintenances"
+
+    maintenance_date   = db.Column(db.Date, default=datetime.date.today, nullable=False)
+    description        = db.Column(db.Text, nullable=False)
+
 
 class WorkRecord(BaseTable):
     """
