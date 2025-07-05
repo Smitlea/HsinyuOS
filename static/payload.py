@@ -261,11 +261,13 @@ add_truck_payload = api.model("AddTruck", {
 
 # —— 油桶 IN / OUT —— #
 add_drum_payload = api.model("DrumRecord", {
-    "record_date": fields.String(required=False, description="YYYY-MM-DD、空值為今天"),
+    "record_date": fields.String(required=False, description="YYYY-MM-DD"),
     "io_type":     fields.String(enum=["IN", "OUT"], required=True),
     "quantity":    fields.Float(required=True, min=0),
-    "unit_price":  fields.Float(required=False, description="IN 時必填，1 位小數"),
+    "unit_price":  fields.Float(required=False, description="IN 時必填 1 位小數"),
+    "crane_id":    fields.Integer(required=False, description="OUT 時必填，被加油的吊車 ID")
 })
+
 
 # —— 貨車加油 —— #
 add_fuel_payload = api.model("FuelRecord", {

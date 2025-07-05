@@ -330,12 +330,9 @@ class OilDrumRecord(BaseTable):
     updated_by = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
     is_deleted = db.Column(db.Boolean, default=False, nullable=False)
 
-    truck = db.relationship("Truck", backref=db.backref("drum_records",
-                             cascade="all, delete-orphan"))
-
-    __table_args__ = (
-        db.CheckConstraint("quantity >= 0", name="chk_drum_qty_nonneg"),
-    )
+    truck = db.relationship("Truck", backref=db.backref("drum_records", cascade="all, delete-orphan"))
+    crane = db.relationship("Crane")  
+    __table_args__ = (db.CheckConstraint("quantity >= 0", name="chk_drum_qty_nonneg"),)
 
 class TruckFuelRecord(BaseTable):
     """

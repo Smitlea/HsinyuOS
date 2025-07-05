@@ -5,7 +5,7 @@ from flask import g
 from flask_restx import Resource
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from sqlalchemy.orm import joinedload
-from static.models import db, User, Truck, OilDrumRecord, TruckFuelRecord
+from static.models import db, User, Truck, OilDrumRecord, TruckFuelRecord, Crane
 from static.util import permission_required
 
 from static.payload import (
@@ -100,24 +100,34 @@ class DrumRecordList(Resource):
         io_type = data.get("io_type")
         qty     = data.get("quantity")
         price   = data.get("unit_price")
+        crane_id = data.get("crane_id")
 
         # ---------- 基本驗證 ---------- #
         if qty is None or qty < 0:
             return {"status": 1, "result": "油量需為非負數"}, 400
-        if io_type == "IN" and price is None:
-            return {"status": 1, "result": "入油 必須填 油量單價"}, 400
-        if io_type == "OUT" and price is not None:
-            return {"status": 1, "result": "出油 不可填 油量單價"}, 400
-
+        if io_type == "IN":
+            if price is None:
+                return {"status": 1, "result": "入油必須填單價"}, 400
+            if crane_id is not None:
+                return {"status": 1, "result": "入油不可指定吊車 crane_id"}, 400
+        else:  # OUT
+            if price is not None:
+                return {"status": 1, "result": "出油不可填單價"}, 400
+            if crane_id is None:
+                return {"status": 1, "result": "出油必須指定吊車 crane_id"}, 400
+            # 確認吊車存在
+            if not Crane.query.get(crane_id):
+                return {"status": 1, "result": "找不到指定吊車"}, 404
         # ---------- 檢查餘量不可為負 ---------- #
-        t = Truck.query.get(truck_id)
-        if not t:
+        truck = Truck.query.get(truck_id)
+        if not truck:
             return {"status": 1, "result": "找不到指定貨車"}, 404
-        if io_type == "OUT" and qty > t.drum_remain():
+        if io_type == "OUT" and qty > truck.drum_remain():
             return {"status": 1, "result": "油桶餘量不足"}, 400
 
         rec = OilDrumRecord(
             truck_id=truck_id,
+            crane_id=crane_id,
             record_date=datetime.date.fromisoformat(
                 data.get("record_date") or datetime.date.today().isoformat()
             ),
