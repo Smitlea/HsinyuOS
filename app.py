@@ -172,9 +172,9 @@ class ForgotPassword(Resource):
 class UsernameListResource(Resource):
 
     @api_ns.doc(description="取得所有使用者 id 與 username（下拉式選單用）")
-    @api_ns.marshal_list_with(username_output)     # 自動把 namedtuple → dict
-    @handle_request_exception                      # ← 你現有的錯誤包裝裝飾器
-    # @jwt_required()  # 若前端只有登入後才能拿清單，再打開
+    @api_ns.marshal_list_with(username_output)    
+    @handle_request_exception                     
+
     def get(self):
         """
         GET /api/usernames
@@ -187,7 +187,7 @@ class UsernameListResource(Resource):
         """
         users = (
             db.session
-            .query(User.id, User.username)
+            .query(User.username)
             .order_by(User.username.asc())      
             .all()
         )
@@ -285,4 +285,4 @@ def handle_invalid_token(jwt_header, jwt_payload):
 #     users = db.session.execute(db.select(User).order_by(User.username)).scalars()
 
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=5050, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=False)

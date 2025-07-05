@@ -121,7 +121,7 @@ class DailyTaskList(Resource):
         )
         db.session.add(task)
         db.session.commit()
-        return {"status": "0", "result": "Daily task created."}, 201
+        return {"status": "0", "result": "工作紀錄成功創建"}, 200
 
 
 # ---------------------------------------
@@ -142,6 +142,7 @@ class DailyTaskDetail(Resource):
             "vendor":       task.vendor,
             "location":     task.site.location if task.site else None,
             "task_date":    task.task_date.isoformat(),
+            "site_id":      task.site.id if task.site else None,
             "crane_number": task.crane.crane_number if task.crane else None,
             "work_time":    task.work_time,
             "note":         task.note,

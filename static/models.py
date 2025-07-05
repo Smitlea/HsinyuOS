@@ -147,7 +147,7 @@ class CraneNotice(BaseTable):
     is_deleted = db.Column(db.Boolean, default=False, nullable=False, comment="是否已刪除")
     photo = db.Column(LONGTEXT, nullable=True, comment="照片URL")  
     created_by   = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False) 
-    update_by  = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    updated_by  = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
 
 
     crane = db.relationship("Crane", backref=db.backref("notices", cascade="all, delete-orphan"))

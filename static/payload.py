@@ -232,7 +232,6 @@ site_list_output = api_ns.model(
 username_output = api_ns.model(
     "UsernameItem",
     {
-        "id": fields.Integer(example=3),
         "username": fields.String(example="smitlea"),
     },
 )
