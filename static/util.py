@@ -8,7 +8,8 @@ from http import HTTPStatus
 from functools import wraps
 from flask_restx import abort
 from werkzeug.exceptions import BadRequest
-from flask import make_response, Response
+from flask import make_response, Response, g
+from flask_jwt_extended import jwt_required, get_jwt_identity
 
 from static.logger import logging
 
@@ -103,6 +104,20 @@ def delete_photo_file(photo_field: str | list[str], PHOTO_DIR: str) -> None:
                 os.remove(full_path)
     except Exception as e:
         raise BadRequest(f"圖片刪除失敗：{e}")
+
+def permission_required(min_level: int = 1):
+    from static.models import User
+    def decorator(fn):
+        @wraps(fn)
+        @jwt_required()
+        def wrapper(*args, **kwargs):
+            user = User.query.get(get_jwt_identity())
+            if not user or user.permission < min_level:
+                return {"status": 1, "result": "使用者權限不足"}, 403
+            g.current_user = user
+            return fn(*args, **kwargs)
+        return wrapper
+    return decorator
 
 
 def measure_db_time(func):

@@ -25,7 +25,8 @@ from flask_cors import CORS
 from function.vehicle import *
 from function.record import *
 from function.location import *
-from static.models import db, User
+from function.fuel import *
+from static.models import db, User, UserProfile
 from static.logger import logging
 from static.util import handle_request_exception
 
@@ -53,11 +54,21 @@ CORS(app, origins=["http://localhost:3000"], supports_credentials=True)
 # ─────────────────────────────────────────────────────────────
 # 初始建表＋預設資料
 # ─────────────────────────────────────────────────────────────
+
+DEFAULT_USERNAMES = ["昱詮", "名易", "俊明", "士原", "雷恩", "淳程", "承家", "雷皓", "政維", "漢智", "嘉穎"]
+
 DEFAULT_NOTICE_COLORS = {
     "待修": "#ff0000",   # 紅
     "異常": "#00ff00",   # 綠
     "現場": "#0000ff",   # 藍
 }
+def _init_users():
+    """初始化預設使用者（只插入不存在者）"""
+    for name in DEFAULT_USERNAMES:
+        if not UserProfile.query.filter_by(name=name).first():
+            db.session.add(UserProfile(name=name))
+            logger.info(f"Insert default user: {name}")
+    db.session.commit()
 
 def _init_notice_color():
     """如果 notice_color 表不存在就創建並塞預設三筆。"""
@@ -77,7 +88,8 @@ db.init_app(app)
 with app.app_context():
     db.create_all()
     _init_notice_color() 
-    logger.info('DB init done')
+    _init_users()
+    logger.info('DB 成功啟動')
 
 
 
@@ -179,16 +191,11 @@ class UsernameListResource(Resource):
         """
         GET /api/usernames
         回傳格式：
-        [
-            {"id": 1, "username": "allen"},
-            {"id": 2, "username": "gary"},
-            ...
-        ]
         """
         users = (
             db.session
-            .query(User.username)
-            .order_by(User.username.asc())      
+            .query(UserProfile.name)
+            .order_by(UserProfile.name.asc())      
             .all()
         )
         logger.info("Username list requested: %d rows", len(users))
@@ -284,5 +291,6 @@ def handle_invalid_token(jwt_header, jwt_payload):
 # def user_list():
 #     users = db.session.execute(db.select(User).order_by(User.username)).scalars()
 
+# port = os.environ.get["port"]
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT")), debug=False)

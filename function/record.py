@@ -1,5 +1,4 @@
-from datetime import datetime, date, timedelta
-import json
+from datetime import datetime
 import pytz
 
 from flask import request
@@ -8,16 +7,15 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from static.models import db, Crane, User, DailyTask, WorkRecord, TaskMaintenance, ConstructionSite, CraneAssignment
 
 from static.payload import (
-    api_ns, api, api_crane, api_test, api_notice, add_task_payload,
-    general_output_payload, add_task_maint_payload, work_record_input_payload
+    api_ns, add_task_payload,
+    general_output_payload, 
+    add_task_maint_payload, 
+    work_record_input_payload
 )
 from static.util import handle_request_exception
-
 from static.logger import logging
 
 logger = logging.getLogger(__file__)
-
-
 tz = pytz.timezone('Asia/Taipei')
 
 @api_ns.route("/api/daily-tasks", methods=["GET", "POST"])

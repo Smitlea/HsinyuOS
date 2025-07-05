@@ -232,7 +232,7 @@ site_list_output = api_ns.model(
 username_output = api_ns.model(
     "UsernameItem",
     {
-        "username": fields.String(example="smitlea"),
+        "name": fields.String(example="smitlea"),
     },
 )
 
@@ -251,3 +251,25 @@ work_record_input_payload = api_ns.model(
         )
     }
 )
+
+# —— 貨車 —— #
+add_truck_payload = api.model("AddTruck", {
+    "truck_number": fields.String(required=True, description="車號"),
+    "latitude":     fields.Float(required=False),
+    "longitude":    fields.Float(required=False),
+})
+
+# —— 油桶 IN / OUT —— #
+add_drum_payload = api.model("DrumRecord", {
+    "record_date": fields.String(required=False, description="YYYY-MM-DD、空值為今天"),
+    "io_type":     fields.String(enum=["IN", "OUT"], required=True),
+    "quantity":    fields.Float(required=True, min=0),
+    "unit_price":  fields.Float(required=False, description="IN 時必填，1 位小數"),
+})
+
+# —— 貨車加油 —— #
+add_fuel_payload = api.model("FuelRecord", {
+    "record_date": fields.String(required=False, description="YYYY-MM-DD、空值為今天"),
+    "quantity":    fields.Float(required=True, min=0),
+    "unit_price":  fields.Float(required=True, description="1 位小數"),
+})

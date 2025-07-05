@@ -41,6 +41,17 @@ class User(BaseTable):
 
     def check_password(self, password):
         return bcrypt.check_password_hash(self.password, password)
+    
+class UserProfile(BaseTable):
+    __tablename__ = "user_profile"
+
+    # user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    name = db.Column(db.String(150), nullable=False)
+    # user = db.relationship('User', backref=db.backref('profile', uselist=False))
+    
+    def to_dict(self):
+        return {"name": self.phone}
+    
 
 class Leave(BaseTable):
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
@@ -248,7 +259,6 @@ class TaskMaintenance(BaseTable):
     maintenance_date   = db.Column(db.Date, default=datetime.date.today, nullable=False)
     description        = db.Column(db.Text, nullable=False)
 
-
 class WorkRecord(BaseTable):
     """
     怪手工作紀錄（第二項）
@@ -278,6 +288,77 @@ class WorkRecord(BaseTable):
             "assistants": self.assistants if self.assistants else [],
         }
     
+# ------------- Truck --------------- #
+class Truck(BaseTable):
+    """
+    貨車基本資料（僅追蹤車號、GPS，可再加容量、車型…）
+    """
+    __tablename__ = "trucks"
+
+    truck_number = db.Column(db.String(50), unique=True, nullable=False, comment="車號")
+
+    def drum_remain(self) -> float:
+        """目前油桶殘量（IN – OUT）"""
+        ins  = sum(r.quantity for r in self.drum_records
+               if not r.is_deleted and r.io_type == "IN")
+        outs = sum(r.quantity for r in self.drum_records
+               if not r.is_deleted and r.io_type == "OUT")
+        return round(ins - outs, 2)
+
+    def fuel_remain(self) -> float:
+        """
+        貨車油箱殘量（目前以『加進去的量累加』方式估算）
+        若之後要扣除行駛耗油，可另外建 consumption 類型
+        """
+        return round(sum(r.quantity for r in self.fuel_records if not r.is_deleted), 2)
+    
+# ------------- 油桶紀錄 --------------- #
+# ── 油桶紀錄（IN / OUT） ───────────────────────
+class OilDrumRecord(BaseTable):
+    """
+    油桶 IN / OUT 紀錄
+    ─ io_type  : IN 表補桶、OUT 表出油到機械
+    ─ quantity : 正數（L）
+    ─ unit_price: IN 時必填，Numeric(7,1) => 0~99999.9
+    """
+    __tablename__ = "oil_drum_records"
+    truck_id    = db.Column(db.Integer, db.ForeignKey("trucks.id"), nullable=False)
+    record_date = db.Column(db.Date, default=datetime.date.today, nullable=False)
+    io_type     = db.Column(db.Enum("IN", "OUT", name="drum_io_type"), nullable=False)
+    quantity    = db.Column(db.Numeric(10,2), nullable=False)
+    unit_price  = db.Column(db.Numeric(7,1), nullable=True)
+    updated_by = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    is_deleted = db.Column(db.Boolean, default=False, nullable=False)
+
+    truck = db.relationship("Truck", backref=db.backref("drum_records",
+                             cascade="all, delete-orphan"))
+
+    __table_args__ = (
+        db.CheckConstraint("quantity >= 0", name="chk_drum_qty_nonneg"),
+    )
+
+class TruckFuelRecord(BaseTable):
+    """
+    貨車本身加油紀錄（車隊油箱）
+    ─ quantity  : 加油量 (L) 必為正
+    ─ unit_price: 單價 (1 位小數，元/L)
+    """
+    __tablename__ = "truck_fuel_records"
+    truck_id    = db.Column(db.Integer, db.ForeignKey("trucks.id"), nullable=False)
+    record_date = db.Column(db.Date, default=datetime.date.today, nullable=False)
+    quantity    = db.Column(db.Numeric(10,2), nullable=False)
+    unit_price  = db.Column(db.Numeric(7,1), nullable=False)
+    updated_by = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    is_deleted = db.Column(db.Boolean, default=False, nullable=False)
+
+    truck = db.relationship("Truck", backref=db.backref("fuel_records", cascade="all, delete-orphan"))
+
+    __table_args__ = (
+        db.CheckConstraint("quantity >= 0", name="chk_fuel_qty_nonneg"),
+    )
+
+
+
 if __name__ == "__main__":
     dotenv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
 

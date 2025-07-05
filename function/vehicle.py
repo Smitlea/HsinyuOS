@@ -403,13 +403,13 @@ class Create_notice(Resource):
             if not Crane.query.get(crane_id):
                 return {"status": "1", "result": f"找不到 ID 為 {crane_id} 的吊車"}, 404
             
-            cutoff_date = datetime.now(tz).date() - timedelta(days=30)
-            print(cutoff_date)
+            # cutoff_date = datetime.now(tz).date() - timedelta(days=30)
+            # print(cutoff_date)
             
             notices = (
                 CraneNotice.query
                 .filter_by(crane_id=crane_id)
-                .filter(CraneNotice.notice_date >= cutoff_date)
+                # .filter(CraneNotice.notice_date >= cutoff_date)
                 .order_by(CraneNotice.notice_date.desc())
                 .all()
             )
