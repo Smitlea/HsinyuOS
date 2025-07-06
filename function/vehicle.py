@@ -28,6 +28,25 @@ PHOTO_DIR = "static/crane_photos"
 NOTICE_DIR = "static/crane_notices"
 MAINTANCE_DIR = "static/crane_maintenances"
 
+@api_crane.route("/api/show_cranes", methods=["GET"])
+class ShowCranes(Resource):
+    @jwt_required()
+    @handle_request_exception
+    def get(self):
+        """
+        取得所有吊車的基本資訊
+        """
+        try:
+            rows = db.session.scalars(
+                db.select(Crane.crane_number).order_by(Crane.crane_number)
+            ).all()
+            result = [{"crane_number": cn} for cn in rows]
+            return {"status": "0", "result": result}, 200
+        except Exception as e:
+            error_class = e.__class__.__name__
+            detail = e.args[0] if e.args else str(e)
+            logger.exception(f"Show Cranes Error: [{error_class}] {detail}")
+            return {"status": "1", "result": error_class, "error": e.args}, 400
 
 @api_crane.route('/api/cranes', methods=['GET', 'POST'])
 class Create_crane(Resource):
@@ -43,7 +62,7 @@ class Create_crane(Resource):
                 total_usage = crane.initial_hours + sum(u.daily_hours for u in usages)
 
                 # 判斷是否超過臨界值
-                threshold = 500 if crane.crane_type == "履帶" else 1000
+                threshold = 450 if crane.crane_type == "履帶" else 950
 
                 result.append({
                     "id": crane.id,

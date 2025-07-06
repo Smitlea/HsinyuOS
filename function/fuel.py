@@ -70,27 +70,35 @@ class TruckDetail(Resource):
 # ------------------------------
 @api.route("/api/trucks/<int:truck_id>/drums", methods=["GET", "POST"])
 class DrumRecordList(Resource):
-    """
-    GET：油桶出入紀錄清單
-    POST：新增 IN / OUT
-    """
     @jwt_required()
     def get(self, truck_id):
-        t = Truck.query.get(truck_id)
-        if not t:
+        truck = Truck.query.get(truck_id)
+        if not truck:
             return {"status": 1, "result": "找不到指定貨車"}, 404
-        rows = OilDrumRecord.query.filter_by(truck_id=truck_id).order_by(
-                    OilDrumRecord.record_date.desc()
-                ).all()
-        return {"status": "0", "result": [
-            {
+
+        rows = (
+            OilDrumRecord.query
+            .filter_by(truck_id=truck_id, is_deleted=False)      # ← 用 filter_by 比較簡潔
+            .order_by(OilDrumRecord.record_date.desc())
+            .all()
+        )
+
+        result = []
+        for r in rows:
+            item = {
                 "id": r.id,
                 "record_date": r.record_date.isoformat(),
                 "io_type": r.io_type,
                 "quantity": float(r.quantity),
-                "unit_price": float(r.unit_price) if r.unit_price else None
-            } for r in rows]}, 200
-    
+            }
+            if r.io_type == "IN" and r.unit_price is not None:      # 只在 IN 時加 unit_price
+                item["unit_price"] = float(r.unit_price)
+            if r.io_type == "OUT" and r.crane_number:               # 只在 OUT 時加 crane_number
+                item["crane_number"] = r.crane_number
+
+            result.append(item)
+
+        return {"status": "0", "result": result}, 200
 
 
     @jwt_required()
@@ -100,7 +108,7 @@ class DrumRecordList(Resource):
         io_type = data.get("io_type")
         qty     = data.get("quantity")
         price   = data.get("unit_price")
-        crane_id = data.get("crane_id")
+        crane_number = data.get("crane_number")
 
         # ---------- 基本驗證 ---------- #
         if qty is None or qty < 0:
@@ -108,15 +116,15 @@ class DrumRecordList(Resource):
         if io_type == "IN":
             if price is None:
                 return {"status": 1, "result": "入油必須填單價"}, 400
-            if crane_id is not None:
-                return {"status": 1, "result": "入油不可指定吊車 crane_id"}, 400
+            if crane_number is not None:
+                return {"status": 1, "result": "入油不可指定吊車車號 crane_number"}, 400
         else:  # OUT
             if price is not None:
                 return {"status": 1, "result": "出油不可填單價"}, 400
-            if crane_id is None:
-                return {"status": 1, "result": "出油必須指定吊車 crane_id"}, 400
+            if crane_number is None:
+                return {"status": 1, "result": "出油必須指定吊車車號 crane_number"}, 400
             # 確認吊車存在
-            if not Crane.query.get(crane_id):
+            if not Crane.query.filter_by(crane_number=crane_number).first():
                 return {"status": 1, "result": "找不到指定吊車"}, 404
         # ---------- 檢查餘量不可為負 ---------- #
         truck = Truck.query.get(truck_id)
@@ -127,7 +135,7 @@ class DrumRecordList(Resource):
 
         rec = OilDrumRecord(
             truck_id=truck_id,
-            crane_id=crane_id,
+            crane_number=crane_number,
             record_date=datetime.date.fromisoformat(
                 data.get("record_date") or datetime.date.today().isoformat()
             ),
@@ -137,7 +145,7 @@ class DrumRecordList(Resource):
         )
         db.session.add(rec)
         db.session.commit()
-        return {"status": "0", "result": "Drum record created."}, 200
+        return {"status": "0", "result": "油桶紀錄成功新增"}, 200
 # ------------------------------
 #  油桶單筆更新/軟刪除 PUT/DELETE
 # ------------------------------
@@ -162,17 +170,24 @@ class DrumRecord(Resource):
         io_type   = data.get("io_type", rec.io_type)
         qty       = data.get("quantity", rec.quantity)
         unit_price= data.get("unit_price", rec.unit_price)
+        crane_number = data.get("crane_number", rec.crane_number)
 
 
         # ---------- 基本驗證 ---------- #
         if qty is None or qty < 0:
             return {"status": 1, "result": "油量需為非負數"}, 400
-        if io_type == "IN" and unit_price is None:
-            return {"status": 1, "result": "入油必須填油量單價"}, 400
-        if io_type == "OUT" and "unit_price" in data:
-            return {"status": 1, "result": "出油不可填油量單價"}, 400
-        if unit_price is not None and unit_price < 0:
-            return {"status": 1, "result": "單價需為非負數"}, 400
+        if io_type == "IN":
+            if unit_price is None:
+                return {"status": 1, "result": "入油必須填單價"}, 400
+            if "crane_number" in data and data["crane_number"] is not None:
+                return {"status": 1, "result": "入油不可填吊車車號"}, 400
+        else:  # io_type == "OUT"
+            if "unit_price" in data:
+                return {"status": 1, "result": "出油不可填單價"}, 400
+            if not crane_number:
+                return {"status": 1, "result": "出油必須指定吊車車號"}, 400
+            if not Crane.query.filter_by(crane_number=crane_number).first():
+                return {"status": 1, "result": "找不到指定吊車"}, 404
 
         # ---------- 模擬新餘量 ---------- #
         truck = rec.truck
@@ -188,9 +203,12 @@ class DrumRecord(Resource):
             return {"status": 1, "result": "更新後出油超過油桶殘量"}, 400
 
         # ---------- 實際更新 ---------- #
-        for f in ("record_date", "io_type", "quantity", "unit_price"):
-            if f in data:
-                setattr(rec, f, data[f])
+        rec.updated_by   = user.id
+        rec.record_date  = data.get("record_date",   rec.record_date)
+        rec.io_type      = io_type
+        rec.quantity     = qty
+        rec.unit_price   = unit_price
+        rec.crane_number = crane_number
 
         db.session.commit()
         return {"status": "0", "result": "油桶紀錄已成功更新"}, 200
@@ -221,8 +239,9 @@ class FuelRecordList(Resource):
     def get(self, truck_id):
         if not Truck.query.get(truck_id):
             return {"status": 1, "result": "找不到指定貨車"}, 404
-        rows = TruckFuelRecord.query.filter_by(
-                truck_id=truck_id
+        rows = TruckFuelRecord.query.filter(
+                truck_id == truck_id,
+                TruckFuelRecord.is_deleted == False
             ).order_by(TruckFuelRecord.record_date.desc()).all()
         return {"status": "0", "result": [
             {
