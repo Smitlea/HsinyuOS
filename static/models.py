@@ -1,6 +1,8 @@
 import os
 import json
 import datetime
+import time
+from static.logger import get_logger
 import pytz
 
 from uuid import uuid4
@@ -9,10 +11,16 @@ from sqlalchemy import create_engine
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
 from sqlalchemy.dialects.mysql import LONGTEXT
 from flask_sqlalchemy import SQLAlchemy
+from flask import g, request
+
+from static.payload import app
+
 from flask_bcrypt import Bcrypt
+from flask_jwt_extended import verify_jwt_in_request, get_jwt_identity
 
 from static.util import encode_photo_to_base64
 
+logger = get_logger(__file__)
 
 bcrypt = Bcrypt()
 db = SQLAlchemy()
@@ -41,7 +49,6 @@ class User(BaseTable):
 
     def check_password(self, password):
         return bcrypt.check_password_hash(self.password, password)
-    
 class UserProfile(BaseTable):
     __tablename__ = "user_profile"
 
@@ -119,6 +126,7 @@ class Crane(BaseTable):
     longitude    = db.Column(db.Float(precision=53), nullable=True) 
     photo = db.Column(db.Text, nullable=True, comment="照片URL")
     site_id = db.Column(db.String(36), db.ForeignKey('construction_site.id'), nullable=False)
+    usages = db.relationship("CraneUsage", back_populates="crane", lazy="selectin")
     site = db.relationship("ConstructionSite",backref=db.backref("cranes", cascade="all, delete-orphan"))
 
     def __repr__(self):
@@ -137,8 +145,7 @@ class CraneUsage(BaseTable):
 
 
     # 多對一關係：一台吊車對多筆使用紀錄
-    crane = db.relationship("Crane", backref=db.backref("usages", cascade="all, delete-orphan"))
-
+    crane = db.relationship("Crane", back_populates="usages")
     def __repr__(self):
         return f"<CraneUsage crane_id={self.crane_id}, date={self.usage_date}, hours={self.daily_hours}>"
 
@@ -354,6 +361,30 @@ class TruckFuelRecord(BaseTable):
     __table_args__ = (
         db.CheckConstraint("quantity >= 0", name="chk_fuel_qty_nonneg"),
     )
+    
+@app.before_request
+def start_timer():
+    g.start_time = time.time()
+
+@app.before_request
+def load_logged_in_user():
+    try:
+        verify_jwt_in_request(optional=True)
+        identity = get_jwt_identity()
+        if identity:
+            user = User.query.get(identity)
+            g.user = user
+        else:
+            g.user = None
+    except Exception:
+        g.user = None
+
+@app.after_request
+def log_response_time(response):
+    if hasattr(g, 'start_time'):
+        elapsed = time.time() - g.start_time
+        logger.debug(f"[{request.method}] {request.path} took {elapsed:.3f} seconds")
+    return response
 
 
 
@@ -369,7 +400,7 @@ if __name__ == "__main__":
 
 
 
-    
+
 # if __name__ == "__main__":
 #     dotenv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
 #     print(dotenv_path)

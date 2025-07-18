@@ -5,7 +5,7 @@ import pytz
 
 from flask_restx import Resource
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 from static.models import db, Crane, User, CraneUsage, CraneNotice, CraneMaintenance, ConstructionSite, NoticeColor
 
 from static.payload import (
@@ -15,7 +15,7 @@ from static.payload import (
     notice_color_model
 )
 from static.util import (
-    handle_request_exception, save_photos, 
+    handle_request_exception, save_photos, g,
     photo_path_to_base64, delete_photo_file
 
 )
@@ -54,12 +54,18 @@ class Create_crane(Resource):
     @handle_request_exception
     def get(self):
         try:
-            cranes = (Crane.query.options(joinedload(Crane.site)).all())
+            cranes = (
+                Crane.query
+                .options(
+                    joinedload(Crane.site),
+                    selectinload(Crane.usages)
+                )
+                .all()
+            )
             result = []
             for crane in cranes:
                 # 計算累計時數
-                usages = CraneUsage.query.filter_by(crane_id=crane.id).all()
-                total_usage = crane.initial_hours + sum(u.daily_hours for u in usages)
+                total_usage = crane.initial_hours + sum(u.daily_hours for u in crane.usages)
 
                 # 判斷是否超過臨界值
                 threshold = 450 if crane.crane_type == "履帶" else 950
@@ -73,7 +79,7 @@ class Create_crane(Resource):
                         "vendor": crane.site.vendor,
                         "location": crane.site.location,
                         "latitude": crane.site.latitude,
-                        "longitude": crane.site.longitude
+                        "longitude": crane.site.longitude,
                         }if crane.site else None,
                     "latitude": crane.latitude,
                     "longitude": crane.longitude,

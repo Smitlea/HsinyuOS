@@ -5,7 +5,7 @@ from datetime import timedelta
 
 from dotenv import load_dotenv
 from flask_jwt_extended import (
-    JWTManager, create_access_token, jwt_required, get_jwt_identity, create_refresh_token
+    JWTManager, verify_jwt_in_request, create_access_token, jwt_required, get_jwt_identity, create_refresh_token
 )
 from sqlalchemy import inspect      
 from static.payload import (
@@ -18,6 +18,7 @@ from static.payload import (
     login_payload,
     username_output
 )
+from flask import g
 from flask_bcrypt import Bcrypt
 from flask_restx import Resource
 from flask_cors import CORS
@@ -48,6 +49,12 @@ app.config["PROPAGATE_EXCEPTIONS"] = True
 app.config['API_KEY']= os.environ.get('API_SECRET_KEY')
 app.config['CACHE_TYPE'] = 'RedisCache'
 app.config['CACHE_REDIS_URL'] = os.getenv('REDIS_URL')
+app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+    "pool_size": 10,             # 預設為 5，可依需求調整
+    "max_overflow": 5,           # 超過 pool_size 時最多多幾條
+    "pool_timeout": 30,          # 等待連線上限（秒）
+    "pool_recycle": 280,         # 自動回收閒置連線，避免 "MySQL server has gone away"
+}
 CORS(app, origins=["http://localhost:3000"], supports_credentials=True)
 
 
