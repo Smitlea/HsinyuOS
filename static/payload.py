@@ -275,3 +275,13 @@ add_fuel_payload = api.model("FuelRecord", {
     "quantity":    fields.Float(required=True, min=0),
     "unit_price":  fields.Float(required=True, description="1 位小數"),
 })
+
+announcement_payload = api_ns.model(
+    "Announcement",
+    {
+        "title": fields.String(required=True, description="公告標題"),
+        "content": fields.String(required=True, description="公告內容"),
+        "photo": fields.List(fields.String, required=False, example="path/to/photo.jpg"),
+        'coordinates': fields.String(required=True, description='地點', default='台中港'),
+    }
+)

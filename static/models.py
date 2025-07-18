@@ -7,8 +7,8 @@ import pytz
 
 from uuid import uuid4
 from dotenv import load_dotenv
-from sqlalchemy import create_engine
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
+from sqlalchemy.orm import validates
 from sqlalchemy.dialects.mysql import LONGTEXT
 from flask_sqlalchemy import SQLAlchemy
 from flask import g, request
@@ -60,15 +60,6 @@ class UserProfile(BaseTable):
         return {"name": self.phone}
     
 
-class Leave(BaseTable):
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    start_date = db.Column(db.TIMESTAMP, nullable=False)
-    end_date = db.Column(db.TIMESTAMP, nullable=False)
-    reason = db.Column(db.String(150), nullable=False)
-    status = db.Column(db.Integer, default=0, nullable=False)
-    # approver = db.Column(db.String(150), default=0, nullable=False)
-    # user = db.relationship('User', backref=db.backref('leaves', lazy=True))
-
 class ConstructionSite(BaseTable):
     __tablename__ = "construction_site"
 
@@ -76,8 +67,8 @@ class ConstructionSite(BaseTable):
     vendor       = db.Column(db.String(100), nullable=False)         # 廠商
     location     = db.Column(db.String(200), nullable=False)         
     photo        = db.Column(LONGTEXT, nullable=True)    
-    latitude     = db.Column(db.Float(precision=53), nullable=False)   
-    longitude    = db.Column(db.Float(precision=53), nullable=False)  
+    latitude     = db.Column(db.Float(precision=53, asdecimal=False), nullable=False)   
+    longitude    = db.Column(db.Float(precision=53, asdecimal=False), nullable=False)  
     note         = db.Column(db.String(100), nullable=True)  
     is_deleted   = db.Column(db.Boolean, default=False, nullable=False)
     created_by   = db.Column(db.Integer, db.ForeignKey("user.id"))   
@@ -122,8 +113,8 @@ class Crane(BaseTable):
     crane_number = db.Column(db.String(50), unique=True, nullable=False, comment="車號")
     crane_type = db.Column(db.Boolean, comment="吊車類型：1=履帶式，0=輪式", nullable=False)
     initial_hours = db.Column(db.Integer, nullable=False, default=100, comment="初始小時數，預設100")
-    latitude     = db.Column(db.Float(precision=53), nullable=True)   
-    longitude    = db.Column(db.Float(precision=53), nullable=True) 
+    latitude     = db.Column(db.Float(precision=53, asdecimal=False), nullable=True)   
+    longitude    = db.Column(db.Float(precision=53, asdecimal=False), nullable=True) 
     photo = db.Column(db.Text, nullable=True, comment="照片URL")
     site_id = db.Column(db.String(36), db.ForeignKey('construction_site.id'), nullable=False)
     usages = db.relationship("CraneUsage", back_populates="crane", lazy="selectin")
@@ -386,7 +377,78 @@ def log_response_time(response):
         logger.debug(f"[{request.method}] {request.path} took {elapsed:.3f} seconds")
     return response
 
+#------------ Announcement --------------- #
+class Announcement(BaseTable):
+    __tablename__ = "announcements"
+    title = db.Column(db.String(100), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    has_photo = db.Column(db.Boolean, default=False, nullable=False)
+    record_date = db.Column(db.Date, default=datetime.date.today, nullable=False)
+    photo = db.Column(LONGTEXT, nullable=True)  # 儲存圖片的 base64 字串
+    latitude     = db.Column(db.Float(precision=53, asdecimal=False), nullable=True)   
+    longitude    = db.Column(db.Float(precision=53, asdecimal=False), nullable=True) 
+    created_by = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    updated_by = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    is_deleted = db.Column(db.Boolean, default=False, nullable=False)
 
+    @validates("photo")
+    def _auto_set_has_photo(self, key, value):
+        self.has_photo = bool(value)
+        return value
+
+    def to_dict(self, with_photo=False):
+        data = {
+            "id": self.id,
+            "title": self.title,
+            "content": self.content,
+            "record_date": self.record_date.isoformat(),
+            "has_photo": self.has_photo
+        }
+        if with_photo and self.has_photo and self.photo:
+            data["photo"] = f"data:image/jpeg;base64,{self.photo}"
+        return data
+    
+class Leave(BaseTable):
+    __tablename__ = "leaves"
+
+    user_id    = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    start_date = db.Column(db.TIMESTAMP, nullable=False)
+    end_date   = db.Column(db.TIMESTAMP, nullable=False)
+    reason     = db.Column(db.String(150), nullable=False)
+    status     = db.Column(db.Integer, default=0, nullable=False)  # 0=pending,1=approved,2=rejected
+    approver   = db.Column(db.Integer, db.ForeignKey("user.id"))
+    is_deleted = db.Column(db.Boolean, default=False, nullable=False)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "start_date": self.start_date.isoformat(),
+            "end_date": self.end_date.isoformat(),
+            "reason": self.reason,
+            "status": self.status,
+            "approver": self.approver,
+            "created_at": self.created_at.isoformat(),
+        }
+    
+
+class SOPVideo(BaseTable):
+    __tablename__ = "sop_videos"
+
+    date         = db.Column(db.Date, nullable=False)
+    title        = db.Column(db.String(150), nullable=False)
+    youtube_url  = db.Column(db.String(255), nullable=False)
+    is_deleted    = db.Column(db.Boolean, default=False, nullable=False)
+    created_by   = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    updated_by   = db.Column(db.Integer, db.ForeignKey("user.id"))
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "date": self.date.isoformat(),
+            "title": self.title,
+            "youtube_url": self.youtube_url,
+        }
 
 if __name__ == "__main__":
     dotenv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
