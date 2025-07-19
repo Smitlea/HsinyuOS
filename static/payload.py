@@ -124,7 +124,7 @@ add_task_maint_payload = api_ns.model("AddTaskMaintenance", {
 })
 
 # 新增維修記錄
-notice_color_model = api.model(
+notice_color_model = api_ns.model(
     "NoticeColor",
     {
         "status_name": fields.String(
@@ -284,4 +284,16 @@ announcement_payload = api_ns.model(
         "photo": fields.List(fields.String, required=False, example="path/to/photo.jpg"),
         'coordinates': fields.String(required=True, description='地點', default='台中港'),
     }
+)
+
+announcemnt_color_model = api_ns.model(
+    "NoticeColor",
+    {
+        "status_name": fields.String(
+            required=True, description="狀態名稱", example="保養"
+        ),
+        "color": fields.String(
+            required=True, description="Hex 或 CSS 顏色名稱", example="#ffa500"
+        ),
+    },
 )

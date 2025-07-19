@@ -5,7 +5,7 @@ from datetime import timedelta
 
 from dotenv import load_dotenv
 from flask_jwt_extended import (
-    JWTManager, verify_jwt_in_request, create_access_token, jwt_required, get_jwt_identity, create_refresh_token
+    JWTManager, create_access_token, jwt_required, get_jwt_identity, create_refresh_token
 )
 from sqlalchemy import inspect      
 from static.payload import (
@@ -18,7 +18,7 @@ from static.payload import (
     login_payload,
     username_output
 )
-from flask import g
+
 from flask_bcrypt import Bcrypt
 from flask_restx import Resource
 from flask_cors import CORS
@@ -27,6 +27,7 @@ from function.vehicle import *
 from function.record import *
 from function.location import *
 from function.fuel import *
+from function.hr import *
 from static.models import db, User, UserProfile
 from static.logger import logging
 from static.util import handle_request_exception
@@ -62,12 +63,19 @@ CORS(app, origins=["http://localhost:3000"], supports_credentials=True)
 # 初始建表＋預設資料
 # ─────────────────────────────────────────────────────────────
 
-DEFAULT_USERNAMES = ["昱詮", "名易", "俊明", "士原", "雷恩", "淳程", "承家", "雷皓", "政維", "漢智", "嘉穎"]
+DEFAULT_USERNAMES = [
+    "昱詮", "名易", "俊明", "士原", "雷恩", "淳程", "承家", "雷皓", "政維", "漢智", "嘉穎"
+]
 
 DEFAULT_NOTICE_COLORS = {
     "待修": "#ff0000",   # 紅
     "異常": "#00ff00",   # 綠
     "現場": "#0000ff",   # 藍
+}
+
+DEFAULT_ANNOUNCEMENT_COLORS = {
+    "注意": "#ff0000",   # 紅
+    "聚餐": "#0000ff",   # 藍
 }
 def _init_users():
     """初始化預設使用者（只插入不存在者）"""
@@ -91,11 +99,26 @@ def _init_notice_color():
             logger.info(f"Insert default NoticeColor: {status} → {color}")
     db.session.commit()
 
+def _init_annocement_color():
+    """如果 notice_color 表不存在就創建並塞預設三筆。"""
+    inspector = inspect(db.engine)
+    if AnnocementColor.__tablename__ not in inspector.get_table_names():
+        logger.info("Creating AnnocementColor table ...")
+        AnnocementColor.__table__.create(bind=db.engine)
+
+    # 檢查並插入預設資料
+    for status, color in DEFAULT_NOTICE_COLORS.items():
+        if not AnnocementColor.query.filter_by(status=status).first():
+            db.session.add(AnnocementColor(status=status, color=color))
+            logger.info(f"Insert default AnnocementColor: {status} → {color}")
+    db.session.commit()
+
 db.init_app(app)
 with app.app_context():
     db.create_all()
     _init_notice_color() 
     _init_users()
+    _init_annocement_color()
     logger.info('DB 成功啟動')
 
 

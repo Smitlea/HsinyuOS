@@ -1,12 +1,16 @@
 import json
+import re
 
 from flask import request
 from flask_restx import Resource
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from werkzeug.exceptions import BadRequest
 
-from static.payload import api, api_ns, leave_payload, general_output_payload, announcement_payload
-from static.models import db, User, Leave, Announcement, SOPVideo
+from static.payload import (
+    api, api_ns, leave_payload, general_output_payload, 
+    announcement_payload, announcemnt_color_model
+)
+from static.models import db, User, Leave, Announcement, SOPVideo, AnnocementColor
 from static.util import handle_request_exception, save_photos, delete_photo_file
 from static.logger import logging
 
@@ -187,7 +191,7 @@ class LeaveList(Resource):
         db.session.add(leave)
         db.session.commit()
         return {"status": "0", "result": "已提交請假申請"}, 200
-
+    
 @api_ns.route("/leaves/<int:leave_id>/approve")
 class LeaveApprove(Resource):
     @jwt_required()
@@ -213,7 +217,61 @@ class LeaveApprove(Resource):
         leave.approver = user.id
         db.session.commit()
         return {"status": "0", "result": "已更新准假內容"}, 200
+    
+    @jwt_required()
+    @handle_request_exception
+    def delete(self, leave_id):
+        """刪除公告（同上）"""
+        user = User.query.get(get_jwt_identity())
+        if user is None:
+            return {"status": "1", "result": "使用者不存在"}, 403
+        if user.permission <= 1:
+            return {"status": "1", "result": "使用者權限不足"}, 403
+        leave = Leave.query.get_or_404(leave_id)
+        leave.is_deleted = True
+        leave.updated_by = user.id
+        db.session.commit()
+        return {"status": "0", "result": "公告已經刪除"}, 200
+        
 
+@api_ns.route("/api/announcement-color", methods=["GET", "POST"])
+class NoticeColorList(Resource):
+    """
+    GET  : 取得所有狀態與顏色 (dict)
+    POST : 新增一筆狀態與顏色
+    """
+
+    @jwt_required()
+    @handle_request_exception
+    def get(self):
+        rows = AnnocementColor.query.all()
+        result: dict[str, str] = {}
+        for r in rows:
+            result.update(r.as_dict())
+        return {"status": "0", "result": result}, 200
+
+    @api.expect(announcemnt_color_model)
+    @jwt_required()
+    @handle_request_exception
+    def post(self):
+        data = api.payload or {}
+        status_name: str | None = data.get("status_name")
+        color: str | None = data.get("color")
+
+        if not (status_name and color):
+            return {"status": "1", "result": "缺少 status_name 或 color"}, 400
+        
+        if not re.fullmatch(r"#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})", color):
+            return {"status": "1", "result": "色碼格式錯誤 (#FFF 或 #FFFFFF)"}, 400
+
+        # 同名狀態不得重複
+        if AnnocementColor.query.filter_by(status=status_name).first():
+            return {"status": "1", "result": "有相同的狀態已經存在"}, 409
+
+        nc = AnnocementColor(status=status_name, color=color)
+        db.session.add(nc)
+        db.session.commit()
+        return {"status": "0", "result": f"已新增 {status_name} → {color}"}, 201
 
 
 @api_ns.route("/sop")

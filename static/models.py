@@ -407,7 +407,19 @@ class Announcement(BaseTable):
         if with_photo and self.has_photo and self.photo:
             data["photo"] = f"data:image/jpeg;base64,{self.photo}"
         return data
+
+class AnnocementColor(BaseTable):
+    __tablename__ = "annocementcolor"
     
+    id = db.Column(db.Integer, primary_key=True)
+    status = db.Column(db.String(50), unique=True, nullable=False)
+    color = db.Column(db.String(20), nullable=False)
+
+    def as_dict(self) -> dict[str, str]:
+        """回傳 {status: color} 的單筆 dict 方便外層組裝"""
+        return {self.status: self.color}
+
+
 class Leave(BaseTable):
     __tablename__ = "leaves"
 
@@ -430,6 +442,8 @@ class Leave(BaseTable):
             "approver": self.approver,
             "created_at": self.created_at.isoformat(),
         }
+    
+
     
 
 class SOPVideo(BaseTable):
