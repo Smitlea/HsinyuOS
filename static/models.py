@@ -387,6 +387,7 @@ class Announcement(BaseTable):
     photo = db.Column(LONGTEXT, nullable=True)  # 儲存圖片的 base64 字串
     latitude     = db.Column(db.Float(precision=53, asdecimal=False), nullable=True)   
     longitude    = db.Column(db.Float(precision=53, asdecimal=False), nullable=True) 
+    status = db.Column(db.String(10), nullable=False, comment="注意事項狀態(聚會/注意)")
     created_by = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
     updated_by = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
     is_deleted = db.Column(db.Boolean, default=False, nullable=False)
@@ -401,6 +402,7 @@ class Announcement(BaseTable):
             "id": self.id,
             "title": self.title,
             "content": self.content,
+            "status": self.status,
             "record_date": self.record_date.isoformat(),
             "has_photo": self.has_photo
         }

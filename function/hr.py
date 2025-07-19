@@ -80,6 +80,7 @@ class AnnouncementList(Resource):
             title=data["title"],
             content=data["content"],
             latitude=latitude,
+            status=data.get["status"],
             longitude=longitude,
             created_by=user.id,
         )
@@ -123,7 +124,7 @@ class AnnouncementDetail(Resource):
         except Exception:
             raise BadRequest("經緯度輸入錯誤. 期望 'lat,lon'")
 
-        for field in ("title", "content"):
+        for field in ("title", "content", "status"):
             if field in data:
                 setattr(announcement, field, data[field])
         
@@ -170,9 +171,14 @@ class LeaveList(Resource):
         - 主管 (permission>1)：看到全部
         """
         user = User.query.get(get_jwt_identity())
-        query = Leave.query if user.permission > 1 else Leave.query.filter_by(user_id=user.id)
+        query = Leave.query.filter(Leave.is_deleted == False)
+        if user.permission <= 1:
+            query = query.filter(Leave.user_id == user.id)
         leaves = query.order_by(Leave.created_at.desc()).all()
-        return {"status": "0", "result": [l.to_dict() for l in leaves]}, 200
+        return {
+            "status": "0",
+            "result": [l.to_dict() for l in leaves]
+        }, 200
     
     @jwt_required()
     @handle_request_exception

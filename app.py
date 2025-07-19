@@ -44,7 +44,7 @@ load_dotenv(override=True)
 # ─────────────────────────────────────────────────────────────
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("SQL_SERVER")
 app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY')
-app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(minutes=60)
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(minutes=120)
 app.config["JWT_REFRESH_TOKEN_EXPIRES"] = timedelta(days=1) 
 app.config["PROPAGATE_EXCEPTIONS"] = True
 app.config['API_KEY']= os.environ.get('API_SECRET_KEY')
@@ -107,7 +107,7 @@ def _init_annocement_color():
         AnnocementColor.__table__.create(bind=db.engine)
 
     # 檢查並插入預設資料
-    for status, color in DEFAULT_NOTICE_COLORS.items():
+    for status, color in DEFAULT_ANNOUNCEMENT_COLORS.items():
         if not AnnocementColor.query.filter_by(status=status).first():
             db.session.add(AnnocementColor(status=status, color=color))
             logger.info(f"Insert default AnnocementColor: {status} → {color}")

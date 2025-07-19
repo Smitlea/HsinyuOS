@@ -49,10 +49,7 @@ def get_logger(name):
 
 if __name__ == "__main__":
     logger = get_logger(__file__)
-    while True:
-        for i in range(10, 60, 10):
-            logger.log(i, "Test")
-            time.sleep(5)
+
 
 
     
