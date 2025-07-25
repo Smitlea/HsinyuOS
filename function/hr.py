@@ -10,8 +10,8 @@ from static.payload import (
     api, api_ns, leave_payload, general_output_payload, 
     announcement_payload, announcemnt_color_model
 )
+from static.util import handle_request_exception, delete_photo_file, save_photos
 from static.models import db, User, Leave, Announcement, SOPVideo, AnnocementColor
-from static.util import handle_request_exception, save_photos, delete_photo_file
 from static.logger import logging
 
 logger = logging.getLogger(__file__)
@@ -80,7 +80,8 @@ class AnnouncementList(Resource):
             title=data["title"],
             content=data["content"],
             latitude=latitude,
-            status=data.get["status"],
+            status=data["status"],
+            record_date=data["record_date"],
             longitude=longitude,
             created_by=user.id,
         )
@@ -101,9 +102,9 @@ class AnnouncementDetail(Resource):
     @handle_request_exception
     def get(self, ann_id):
         """取得單一公告（with_photo=1 會帶照片）"""
-        with_photo = request.args.get("with_photo") == "1"
         announcement = Announcement.query.get_or_404(ann_id)
-        return {"status": "0", "result": announcement.to_dict(with_photo)}, 200
+        # base64_photos = photo_path_to_base64(Announcement.photo)
+        return {"status": "0", "result": announcement.to_dict(include_photo=True)}, 200
 
     @jwt_required()
     @handle_request_exception
@@ -124,18 +125,14 @@ class AnnouncementDetail(Resource):
         except Exception:
             raise BadRequest("經緯度輸入錯誤. 期望 'lat,lon'")
 
-        for field in ("title", "content", "status"):
+        for field in ("title", "content", "status","date"):
             if field in data:
                 setattr(announcement, field, data[field])
         
-        if "photo" in data:
-            photo_value = data["photo"]
-            if isinstance(photo_value, list):
-                announcement.photo = json.dumps(photo_value)
-            elif photo_value is None:
-                announcement.photo = None
-            else:
-                raise BadRequest("photo 欄位必須是 list 或 None")
+        if photo_list := data.get("photo"): 
+            filename = f"{announcement.id}_{announcement.title}"
+            photos_path = save_photos(filename, photo_list, PHOTO_DIR)
+            announcement.photo = json.dumps(photos_path)
 
         announcement.updated_by = user.id
         db.session.commit()

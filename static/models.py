@@ -18,7 +18,7 @@ from static.payload import app
 from flask_bcrypt import Bcrypt
 from flask_jwt_extended import verify_jwt_in_request, get_jwt_identity
 
-from static.util import encode_photo_to_base64
+from static.util import encode_photo_to_base64, photo_path_to_base64
 
 logger = get_logger(__file__)
 
@@ -383,6 +383,7 @@ class Announcement(BaseTable):
     title = db.Column(db.String(100), nullable=False)
     content = db.Column(db.Text, nullable=False)
     has_photo = db.Column(db.Boolean, default=False, nullable=False)
+    has_location = db.Column(db.Boolean, default=False, nullable=False)
     record_date = db.Column(db.Date, default=datetime.date.today, nullable=False)
     photo = db.Column(LONGTEXT, nullable=True)  # 儲存圖片的 base64 字串
     latitude     = db.Column(db.Float(precision=53, asdecimal=False), nullable=True)   
@@ -396,19 +397,29 @@ class Announcement(BaseTable):
     def _auto_set_has_photo(self, key, value):
         self.has_photo = bool(value)
         return value
+    @validates("latitude")
+    def _auto_set_has_location(self, key, value):
+        self.has_location = bool(value)
+        return value
 
-    def to_dict(self, with_photo=False):
+    def to_dict(self, include_photo=False):
         data = {
             "id": self.id,
             "title": self.title,
             "content": self.content,
             "status": self.status,
             "record_date": self.record_date.isoformat(),
-            "has_photo": self.has_photo
+            "has_photo": self.has_photo,
+            "has_location":self.has_location
         }
-        if with_photo and self.has_photo and self.photo:
-            data["photo"] = f"data:image/jpeg;base64,{self.photo}"
+        if include_photo:
+            data["latitude"] = self.latitude
+            data["longitude"] = self.longitude
+            if self.has_photo and self.photo:
+                data["photo"] = photo_path_to_base64(self.photo)
+            
         return data
+
 
 class AnnocementColor(BaseTable):
     __tablename__ = "annocementcolor"
@@ -444,9 +455,7 @@ class Leave(BaseTable):
             "approver": self.approver,
             "created_at": self.created_at.isoformat(),
         }
-    
-
-    
+       
 
 class SOPVideo(BaseTable):
     __tablename__ = "sop_videos"
