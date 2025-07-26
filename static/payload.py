@@ -119,6 +119,7 @@ add_task_payload = api_ns.model("AddDailyTask", {
 })
 
 add_task_maint_payload = api_ns.model("AddTaskMaintenance", {
+    
     "maintenance_date": fields.String(description="YYYY-MM-DD，預設今天"),
     "description":      fields.String(required=True),
 })

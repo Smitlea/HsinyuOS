@@ -79,9 +79,8 @@ class AnnouncementList(Resource):
         announcement = Announcement(
             title=data["title"],
             content=data["content"],
-            latitude=latitude,
             status=data["status"],
-            record_date=data["record_date"],
+            latitude=latitude,
             longitude=longitude,
             created_by=user.id,
         )

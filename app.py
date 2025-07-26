@@ -134,12 +134,13 @@ class Register(Resource):
         """
         data = api.payload
         username = data.get('username')
+        nickname = data.get('nickname')
         email = data.get('email')
         password = data.get('password')
         try:
             if User.query.filter_by(username=username).first():
                 return ({'status':1, 'result': '這個用戶已存在'}), 200
-            new_user = User(username=username, email=email)
+            new_user = User(username=username, nickname=nickname, email=email)
             new_user.set_password(password)
             db.session.add(new_user)
             db.session.commit()

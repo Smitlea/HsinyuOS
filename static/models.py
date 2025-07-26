@@ -40,6 +40,7 @@ class BaseTable(db.Model):
 
 class User(BaseTable):
     username = db.Column(db.String(150), unique=True, nullable=False)
+    nickname = db.Column(db.String(150), unique=True, nullable=True)
     email = db.Column(db.String(150), unique=True, nullable=False)
     password = db.Column(db.String(150), nullable=False)
     permission = db.Column(db.Integer, default=0, nullable=False)
@@ -49,6 +50,8 @@ class User(BaseTable):
 
     def check_password(self, password):
         return bcrypt.check_password_hash(self.password, password)
+    
+
 class UserProfile(BaseTable):
     __tablename__ = "user_profile"
 
@@ -241,12 +244,21 @@ class DailyTask(BaseTable):
 
     site_id  = db.Column(db.String(36), db.ForeignKey("construction_site.id"))
     crane_id = db.Column(db.Integer,     db.ForeignKey("cranes.id"))
+
     created_by = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
     updated_by = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
     is_deleted = db.Column(db.Boolean, default=False, nullable=False)
+    updater = db.relationship(
+        "User",
+        foreign_keys=[updated_by],
+        lazy="joined" 
+    )
 
     site  = db.relationship("ConstructionSite", backref=db.backref("daily_tasks", cascade="all, delete-orphan"))
     crane = db.relationship("Crane",            backref=db.backref("daily_tasks", cascade="all, delete-orphan"))
+    @property
+    def updated_by_nickname(self) -> str | None:
+        return self.updater.nickname if self.updater else None
 
 class TaskMaintenance(BaseTable):
     """
@@ -254,8 +266,21 @@ class TaskMaintenance(BaseTable):
     """
     __tablename__ = "task_maintenances"
 
-    maintenance_date   = db.Column(db.Date, default=datetime.date.today, nullable=False)
-    description        = db.Column(db.Text, nullable=False)
+    # user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    record_date  = db.Column(db.Date, default=datetime.date.today, nullable=False)
+    description  = db.Column(db.Text, nullable=False)
+    is_deleted = db.Column(db.Boolean, default=False, nullable=False)
+    created_by = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    updated_by = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    creator = db.relationship(
+        "User",
+        foreign_keys=[created_by],
+        lazy="joined" 
+    )
+    @property
+    def nickname(self) -> str | None:
+        return self.creator.nickname if self.creator else None
+
 
 class WorkRecord(BaseTable):
     """
@@ -271,14 +296,31 @@ class WorkRecord(BaseTable):
     qty_120     = db.Column(db.Integer, default=0, nullable=False)
     qty_200     = db.Column(db.Integer, default=0, nullable=False)
     assistants   = db.Column(db.JSON) 
+    site_id  = db.Column(db.String(36), db.ForeignKey("construction_site.id"))
+    crane_id = db.Column(db.Integer,     db.ForeignKey("cranes.id"))
 
     created_by  = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
-    update_by   = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    updated_by   = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
     is_deleted  = db.Column(db.Boolean, default=False, nullable=False)
+
+    site  = db.relationship("ConstructionSite", backref=db.backref("work_records", cascade="all, delete-orphan"))
+    crane = db.relationship("Crane",            backref=db.backref("work_records", cascade="all, delete-orphan"))
+
+    updater = db.relationship(
+        "User",
+        foreign_keys=[updated_by],
+        lazy="joined" 
+    )
+
+    @property
+    def updated_by_nickname(self) -> str | None:
+        return self.updater.nickname if self.updater else None
 
     def to_dict(self):
         return {
             "id": self.id,
+            "crane": self.crane.crane_number,
+            "location": self.site.location,
             "record_date": self.record_date.isoformat(),
             "vendor": self.vendor,
             "qty_120": self.qty_120,
