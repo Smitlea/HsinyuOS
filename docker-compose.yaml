@@ -1,8 +1,9 @@
+version: "3.9"
 
 services:
   mariadb:
     image: mariadb
-    container_name: mariadb-test
+    container_name: mariadb-container
     restart: always
     environment:
       MYSQL_ROOT_PASSWORD: a!y2w4
@@ -13,7 +14,29 @@ services:
       - mariadb_data:/var/lib/mysql
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
-      - "3310:3306"
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-pa!y2w4"]
+      interval: 10s
+      retries: 5
+      start_period: 20s
+
+  hsinyu-os:
+    build:
+      context: .
+      dockerfile: Dockerfile  # 確保你的 Flask Dockerfile 就叫這個
+    container_name: hsinyu-os-container
+    restart: always
+    environment:
+      SQLALCHEMY_DATABASE_URI: mysql://root:a!y2w4@mariadb:3306/HsinyuOS
+      JWT_SECRET_KEY: p@ssw0rd
+    ports:
+      - "5000:5000"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    volumes:
+      - .:/app
 
 volumes:
   mariadb_data:

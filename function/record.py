@@ -37,8 +37,11 @@ class DailyTaskList(Resource):
                 selectinload(DailyTask.site),
             )
             .order_by(DailyTask.task_date.desc())
-            .all()
         )
+        user = User.query.get(get_jwt_identity())
+        if user.permission <= 1:
+            tasks = tasks.filter(DailyTask.created_by == user.id).all()
+
         result = []
         for t in tasks:
             result.append({
@@ -422,7 +425,11 @@ class ExtravtoryWorkRecord(Resource):
         """
         records = WorkRecord.query.filter_by(
             is_deleted=False
-        ).order_by(WorkRecord.record_date.desc()).all()
+        ).order_by(WorkRecord.record_date.desc())
+
+        user = User.query.get(get_jwt_identity())
+        if user.permission <= 1:
+            records = records.filter(WorkRecord.created_by == user.id).all()
         result = []
 
         for r in records:
@@ -436,6 +443,7 @@ class ExtravtoryWorkRecord(Resource):
                 "qty_120": r.qty_120,
                 "qty_200": r.qty_200,
                 "assistants": r.assistants,
+                "has_note": r.has_note,
             })
         return {"status": "0", "result": result}, 200
 
@@ -451,6 +459,7 @@ class ExtravtoryWorkRecord(Resource):
         site_id = data.get("site_id")
         crane_number= data.get("crane_number")
         site = ConstructionSite.query.get(site_id)
+        note = data.get("note")
         if not site:
             return {"status": 1, "result": "找不到工地"}, 404
         
@@ -491,6 +500,7 @@ class ExtravtoryWorkRecord(Resource):
             record_date=record_date,
             site      = site,
             crane     = crane,
+            note = note,
             vendor=vendor,
             qty_120=qty_120,
             qty_200=qty_200,
@@ -528,6 +538,7 @@ class WorkRecordDetail(Resource):
         data = request.json
         site_id = data.get("site_id")
         crane_number= data.get("crane_number")
+        note = data.get("note")
         site = ConstructionSite.query.get(site_id)
         if not site:
             return {"status": 1, "result": "找不到工地"}, 404
@@ -570,6 +581,7 @@ class WorkRecordDetail(Resource):
             return {"status": 1, "result": "record_date 格式錯誤，須 YYYY-MM-DD"}, 400
 
         # ─────── 更新欄位 ───────
+        record.note = note
         record.record_date = record_date
         record.vendor      = vendor
         record.qty_120     = qty_120

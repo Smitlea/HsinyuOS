@@ -298,6 +298,8 @@ class WorkRecord(BaseTable):
     assistants   = db.Column(db.JSON) 
     site_id  = db.Column(db.String(36), db.ForeignKey("construction_site.id"))
     crane_id = db.Column(db.Integer,     db.ForeignKey("cranes.id"))
+    note         = db.Column(db.String(150), nullable=True)  
+    has_note    = db.Column(db.Boolean, default=False, nullable=False) 
 
     created_by  = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
     updated_by   = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
@@ -315,14 +317,21 @@ class WorkRecord(BaseTable):
     @property
     def updated_by_nickname(self) -> str | None:
         return self.updater.nickname if self.updater else None
+    
+    @validates("note")
+    def _auto_set_has_note(self, key, value):
+        self.has_note = bool(value)
+        return value
 
     def to_dict(self):
         return {
             "id": self.id,
             "crane": self.crane.crane_number,
+            "site": self.site_id,
             "location": self.site.location,
             "record_date": self.record_date.isoformat(),
             "vendor": self.vendor,
+            "note": self.note,
             "qty_120": self.qty_120,
             "qty_200": self.qty_200,
             "assistants": self.assistants if self.assistants else [],
