@@ -443,7 +443,7 @@ class ExtravtoryWorkRecord(Resource):
                 "qty_120": r.qty_120,
                 "qty_200": r.qty_200,
                 "assistants": r.assistants,
-                "has_note": r.has_note,
+                "note": r.note,
             })
         return {"status": "0", "result": result}, 200
 

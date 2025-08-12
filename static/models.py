@@ -26,16 +26,27 @@ bcrypt = Bcrypt()
 db = SQLAlchemy()
 tz = pytz.timezone('Asia/Taipei')
  
-def UTC8():
-    return datetime.datetime.now(tz)
+
+PART_LABELS = {
+    "engine_oil": "機油",
+    "main_hoist_gear_oil": "主捲齒輪油",
+    "lion_head_gear_oil": "獅頭齒輪油",
+    "aux_hoist_gear_oil": "補捲齒輪油",
+    "luffing_gear_oil": "起伏齒輪油",
+    "slewing_gear_oil": "旋回齒輪油",
+    "circulation_oil": "循環油",
+    "belts": "皮帶",
+    "sprocket": "齒盤",
+    "sprocket_oiling": "齒盤上油",
+}
 
 class BaseTable(db.Model):
     __abstract__ = True
     __table_args__ = {"mysql_charset": "utf8mb4"}
 
     id           = db.Column(db.Integer, primary_key=True)
-    created_at = db.Column(db.DateTime(timezone=True), default=UTC8)
-    updated_at = db.Column(db.DateTime(timezone=True), default=UTC8, onupdate=UTC8)
+    created_at = db.Column(db.DateTime(timezone=True), default=datetime.datetime.now(tz))
+    updated_at = db.Column(db.DateTime(timezone=True), default=datetime.datetime.now(tz), onupdate=datetime.datetime.now(tz))
 
 
 class User(BaseTable):

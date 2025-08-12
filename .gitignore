@@ -12,3 +12,6 @@ migrations/
 init.sql
 app.py
 nginx/
+log*
+static/announcement_photos/
+static/crane_maintenances/
