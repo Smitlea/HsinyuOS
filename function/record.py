@@ -5,7 +5,10 @@ from flask import request
 from flask_restx import Resource
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from sqlalchemy.orm import selectinload  
-from static.models import db, Crane, User, DailyTask, WorkRecord, TaskMaintenance, ConstructionSite, CraneAssignment
+from static.models import (
+    db, Crane, User, DailyTask, _sum_usage_hours,
+    WorkRecord, TaskMaintenance, ConstructionSite, CraneAssignment
+)
 
 from static.payload import (
     api_ns, add_task_payload,
@@ -127,6 +130,8 @@ class DailyTaskList(Resource):
         )
         db.session.add(task)
         db.session.commit()
+        if crane:
+            _sum_usage_hours(crane.id)
         return {"status": "0", "result": "工作紀錄成功創建"}, 200
 
 
@@ -227,6 +232,8 @@ class DailyTaskDetail(Resource):
         task.crane     = crane
         task.updated_by = user.id
         db.session.commit()
+        if crane:
+            _sum_usage_hours(crane.id)
         return {"status": "0", "result": "工作紀錄成功更新"}, 200
     
     @jwt_required()
@@ -251,6 +258,8 @@ class DailyTaskDetail(Resource):
         task.updated_by = user.id
 
         db.session.commit()
+        if task.crane_id:
+            _sum_usage_hours(task.crane_id)
         return {"status": "0", "result": "維修紀錄已成功刪除"}, 200
 
 

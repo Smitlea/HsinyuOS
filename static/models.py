@@ -7,7 +7,7 @@ import pytz
 
 from uuid import uuid4
 from dotenv import load_dotenv
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, func
 from sqlalchemy.orm import validates
 from sqlalchemy.dialects.mysql import LONGTEXT
 from flask_sqlalchemy import SQLAlchemy
@@ -26,19 +26,6 @@ bcrypt = Bcrypt()
 db = SQLAlchemy()
 tz = pytz.timezone('Asia/Taipei')
  
-
-PART_LABELS = {
-    "engine_oil": "機油",
-    "main_hoist_gear_oil": "主捲齒輪油",
-    "lion_head_gear_oil": "獅頭齒輪油",
-    "aux_hoist_gear_oil": "補捲齒輪油",
-    "luffing_gear_oil": "起伏齒輪油",
-    "slewing_gear_oil": "旋回齒輪油",
-    "circulation_oil": "循環油",
-    "belts": "皮帶",
-    "sprocket": "齒盤",
-    "sprocket_oiling": "齒盤上油",
-}
 
 class BaseTable(db.Model):
     __abstract__ = True
@@ -131,7 +118,7 @@ class Crane(BaseTable):
     longitude    = db.Column(db.Float(precision=53, asdecimal=False), nullable=True) 
     photo = db.Column(db.Text, nullable=True, comment="照片URL")
     site_id = db.Column(db.String(36), db.ForeignKey('construction_site.id'), nullable=False)
-    usages = db.relationship("CraneUsage", back_populates="crane", lazy="selectin")
+    usages  = db.relationship("CraneUsage", back_populates="crane", uselist=False, cascade="all, delete-orphan")
     site = db.relationship("ConstructionSite",backref=db.backref("cranes", cascade="all, delete-orphan"))
 
     def __repr__(self):
@@ -535,6 +522,149 @@ class SOPVideo(BaseTable):
             "date": self.date.isoformat(),
             "title": self.title,
             "youtube_url": self.youtube_url,
+        }
+
+
+
+def _sum_usage_hours(crane_id: int) -> float | None:
+    """
+    總時數 = initial_hours + Σ DailyTask.work_time（is_deleted=False）
+    同步寫回一對一的 CraneHour（快取）
+    """
+    crane = Crane.query.get(crane_id)
+    if not crane:
+        return None
+
+    total_work = db.session.query(
+        func.coalesce(func.sum(DailyTask.work_time), 0.0)
+    ).filter(
+        DailyTask.crane_id == crane_id,
+        DailyTask.is_deleted.is_(False)
+    ).scalar() or 0.0
+
+    base = float(crane.initial_hours or 0.0)
+    total = base + float(total_work)
+
+    if crane.hour is None:
+        crane.hour = CraneUsage(total_hours=total)
+    else:
+        crane.hour.total_hours = total
+        crane.hour.last_recalc_at = datetime.datetime.now(tz)
+
+    db.session.commit()
+    return total
+
+def _maintenance_threshold(crane: "Crane") -> int:
+    """
+    門檻：履帶式=450，小時；輪式=950 小時
+    注意：crane.crane_type 在 schema 是 Boolean（1=履帶, 0=輪式）
+    """
+    return 450 if bool(crane.crane_type) else 950
+
+
+# ────────── 週期常數與規則 ──────────
+CYCLE_HOURS = 500
+CYCLES_PER_ROUND = 12
+ROUND_HOURS = CYCLE_HOURS * CYCLES_PER_ROUND  # 6000
+
+PART_LABELS = {
+    "engine_oil": "機油",
+    "main_hoist_gear_oil": "主捲齒輪油",
+    "lion_head_gear_oil": "獅頭齒輪油",
+    "aux_hoist_gear_oil": "補捲齒輪油",
+    "luffing_gear_oil": "起伏齒輪油",
+    "slewing_gear_oil": "旋回齒輪油",
+    "circulation_oil": "循環油",
+    "belts": "皮帶",
+    "sprocket": "齒盤",
+    "sprocket_oiling": "齒盤上油",
+}
+
+# 需要紀錄的濾心（與哪些油品一起更換）
+CONSUMABLES_HINTS = {
+    "engine_oil": ["engine_oil_filter"],  # 機油濾心
+    # 循環油：排水、進油、回油濾心
+    "circulation_oil": ["circulation_drain_filter", "circulation_inlet_filter", "circulation_return_filter"],
+}
+
+ALLOWED_PARTS = set(PART_LABELS.keys())
+ALLOWED_CONSUMABLES = {"engine_oil_filter", "circulation_drain_filter", "circulation_inlet_filter", "circulation_return_filter"}
+
+
+
+def _cycle_info(total_hours: int) -> dict:
+    """
+    傳回目前所在週期資訊：
+    - cycle_index: 1~12
+    - round_base: 本輪起始基準小時（例如 12000、18000…）
+    - cycle_start, cycle_end: 本週期的小時範圍 [start, end)
+    """
+    # 本輪偏移
+    offset = total_hours % ROUND_HOURS  # 0~5999
+    cycle_index = (offset // CYCLE_HOURS) + 1  # 1..12
+    round_base = total_hours - offset          # 0, 6000, 12000, ...
+    cycle_start = round_base + (cycle_index - 1) * CYCLE_HOURS
+    cycle_end = cycle_start + CYCLE_HOURS
+    return {
+        "cycle_index": int(cycle_index),
+        "round_base": int(round_base),
+        "cycle_start": int(cycle_start),
+        "cycle_end": int(cycle_end),
+    }
+
+def _due_parts_for_cycle(cycle_index: int) -> list[str]:
+    """
+    規則：
+    - 機油：每 500h（每一週期）
+    - 主捲、獅頭齒輪油：每 1000h（週期 2,4,6,8,10,12）
+    - 補捲、起伏、旋回齒輪油：每 1500h（週期 3,6,9,12）
+    - 循環油：每 2000h（週期 4,8,12）
+    - 皮帶、齒盤：每 6000h（週期 12），加「齒盤上油」
+    """
+    due = {"engine_oil"}  # 每期都要
+    if cycle_index % 2 == 0:
+        due.update({"main_hoist_gear_oil", "lion_head_gear_oil"})
+    if cycle_index % 3 == 0:
+        due.update({"aux_hoist_gear_oil", "luffing_gear_oil", "slewing_gear_oil"})
+    if cycle_index % 4 == 0:
+        due.add("circulation_oil")
+    if cycle_index == 12:
+        due.update({"belts", "sprocket", "sprocket_oiling"})
+    return sorted(due)
+
+def _consumables_hints_for_parts(parts: list[str]) -> list[str]:
+    hints: list[str] = []
+    for p in parts:
+        hints.extend(CONSUMABLES_HINTS.get(p, []))
+    return sorted(set(hints))
+
+# ────────── 保養紀錄模型 ──────────
+class MaintenanceRecord(BaseTable):
+    """
+    正式保養紀錄（多選零件 + 可記錄濾心耗材）
+    """
+    __tablename__ = "maintenance_records"
+
+    crane_id = db.Column(db.Integer, db.ForeignKey("cranes.id"), nullable=False)
+    record_date = db.Column(db.Date, nullable=False, default=datetime.date.today)
+    maintenance_hours = db.Column(db.Integer, nullable=False, comment="保養時的整點小時數")
+    parts = db.Column(db.JSON, nullable=False, default=list, comment="本次更換的零件代碼陣列")
+    consumables = db.Column(db.JSON, nullable=True, comment="本次更換的濾心耗材代碼陣列")
+    note = db.Column(db.String(150), nullable=True)
+
+    created_by = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+
+    crane = db.relationship("Crane", backref=db.backref("maintenance_records", cascade="all, delete-orphan"))
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "crane_id": self.crane_id,
+            "record_date": self.record_date.isoformat(),
+            "maintenance_hours": self.maintenance_hours,
+            "parts": self.parts,
+            "consumables": self.consumables or [],
+            "note": self.note,
         }
 
 if __name__ == "__main__":

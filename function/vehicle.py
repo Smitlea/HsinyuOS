@@ -6,8 +6,10 @@ import pytz
 from flask_restx import Resource
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from sqlalchemy.orm import joinedload, selectinload
-from static.models import db, Crane, User, CraneUsage, CraneNotice, CraneMaintenance, ConstructionSite, NoticeColor
-
+from static.models import( db, Crane, User, DailyTask,
+CraneUsage, CraneNotice, CraneMaintenance, ConstructionSite, NoticeColor,
+_sum_usage_hours, _maintenance_threshold
+)
 from static.payload import (
     api_ns, api, api_crane, api_test, api_notice,
     add_crane_payload, general_output_payload,
@@ -56,35 +58,28 @@ class Create_crane(Resource):
         try:
             cranes = (
                 Crane.query
-                .options(
-                    joinedload(Crane.site),
-                    selectinload(Crane.usages)
-                )
+                .options(joinedload(Crane.site))   # 這裡不再 selectinload usages
                 .all()
             )
             result = []
-            for crane in cranes:
-                # 計算累計時數
-                total_usage = crane.initial_hours + sum(u.daily_hours for u in crane.usages)
-
-                # 判斷是否超過臨界值
-                threshold = 450 if crane.crane_type == "履帶" else 950
-
+            for cranes in cranes:
+                total_usage = _sum_usage_hours(cranes.id) or float(cranes.initial_hours)
+                threshold   = _maintenance_threshold(cranes)
                 result.append({
-                    "id": crane.id,
-                    "crane_number": crane.crane_number,
-                    "crane_type": crane.crane_type,
+                    "id": cranes.id,
+                    "crane_number": cranes.crane_number,
+                    "crane_type": cranes.crane_type,
                     "site": {
-                        "id": crane.site.id,
-                        "vendor": crane.site.vendor,
-                        "location": crane.site.location,
-                        "latitude": crane.site.latitude,
-                        "longitude": crane.site.longitude,
-                        }if crane.site else None,
-                    "latitude": crane.latitude,
-                    "longitude": crane.longitude,
+                        "id": cranes.site.id,
+                        "vendor": cranes.site.vendor,
+                        "location": cranes.site.location,
+                        "latitude": cranes.site.latitude,
+                        "longitude": cranes.site.longitude,
+                    } if cranes.site else None,
+                    "latitude": cranes.latitude,
+                    "longitude": cranes.longitude,
                     "total_usage_hours": total_usage,
-                    "alert": total_usage > threshold  
+                    "alert": total_usage >= threshold,   # 到門檻就提醒
                 })
             return {"status": "0", "result": result}, 200
         except Exception as e:
@@ -163,9 +158,8 @@ class Crane_detail(Resource):
             if crane is None:
                 return {"status": "1", "result": "找不到指定的吊車"}, 404
             
-            usages = CraneUsage.query.filter_by(crane_id=crane_id).all()
-            total_usage = crane.initial_hours + sum(u.daily_hours for u in usages)
-            threshold = 500 if crane.crane_type == "履帶" else 1000
+            total_usage = _sum_usage_hours(crane.id) or float(crane.initial_hours)
+            threshold   = _maintenance_threshold(crane)
             alert = total_usage > threshold
 
             base64_photos = photo_path_to_base64(crane.site.photo)
@@ -262,25 +256,40 @@ class Create_usage(Resource):
     @jwt_required()
     def get(self, crane_id):
         """
-        取得指定 crane_id 的所有使用紀錄
+        改為回傳：該吊車的 DailyTask 明細 + 彙總與提醒
         """
         try:
-
             crane = Crane.query.get(crane_id)
             if crane is None:
                 return {"status": "1", "result": "找不到指定吊車"}, 404
-            
-            usages = CraneUsage.query.filter(
-                CraneUsage.crane_id == crane_id,
-            ).order_by(CraneUsage.usage_date.desc()).all()
-            result = []
-            for u in usages:
-                result.append({
-                    "id": u.id,
-                    "usage_date": u.usage_date.isoformat(),
-                    "daily_hours": u.daily_hours,
-                })
-            return {"status": "0", "result": result}, 200
+
+            tasks = (DailyTask.query
+                    .filter(
+                        DailyTask.crane_id == crane_id,
+                        DailyTask.is_deleted.is_(False)
+                    )
+                    .order_by(DailyTask.task_date.desc())
+                    .all())
+            items = [{
+                "task_id": t.id,
+                "task_date": t.task_date.isoformat(),
+                "work_time": float(t.work_time),
+                "note": t.note,
+            } for t in tasks]
+
+            total_usage = _sum_usage_hours(crane_id) or float(crane.initial_hours)
+            threshold   = _maintenance_threshold(crane)
+
+            return {"status": "0", "result": {
+                "crane_id": crane_id,
+                "items": items,
+                "summary": {
+                    "initial_hours": float(crane.initial_hours),
+                    "total_usage_hours": total_usage,
+                    "threshold": threshold,
+                    "alert": total_usage >= threshold
+                }
+            }}, 200
 
         except Exception as e:
             error_class = e.__class__.__name__
@@ -293,43 +302,9 @@ class Create_usage(Resource):
     @api_ns.expect(add_usage_payload)                 # 如果有定義 usage payload
     @api_ns.marshal_with(general_output_payload)      # 和您原本的回傳格式一致
     def post(self, crane_id):
-        """
-        新增使用紀錄
-        """
-        try:
-            data = api_ns.payload
-            usage_date = data.get('usage_date')
-            daily_hours = data.get('daily_hours', 8)
-
-            # 如要檢查使用者權限
-            user = User.query.get(get_jwt_identity())
-            if user is None:
-                return {"status": "1", "result": "使用者不存在"}, 403
-            if user.permission < 0:
-                return {"status": "1", "result": "使用者權限不足"}
-
-            # 判斷日期格式或預設值
-            if not usage_date:
-                usage_date = datetime.now(tz).date()
-            else:
-                usage_date = datetime.strptime(usage_date, "%Y-%m-%d").date()
-
-            new_usage = CraneUsage(
-                crane_id=crane_id,
-                usage_date=usage_date,
-                daily_hours=daily_hours
-            )
-
-            db.session.add(new_usage)
-            db.session.commit()
-            return {"status": "0", "result": "Usage record created."}, 201
-
-        except Exception as e:
-            error_class = e.__class__.__name__
-            detail = e.args[0] if e.args else str(e)
-            logger.warning(f"Add Usage Error: [{error_class}] detail: {detail}")
-            return {"status": "1", "result": error_class, "error": e.args}, 400
-
+               return {"status": "1",
+                "result": "此端點已停用，請改用 /api/daily-tasks 建立工時"},
+               410
 
 @api_test.route('/api/usages/<int:usage_id>', methods=['GET', 'PUT', 'DELETE'])
 class Usage(Resource):
