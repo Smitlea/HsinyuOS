@@ -28,6 +28,7 @@ from function.record import *
 from function.location import *
 from function.fuel import *
 from function.hr import *
+from function.maintain import *
 from static.models import db, User, UserProfile
 from static.logger import logging
 from static.util import handle_request_exception

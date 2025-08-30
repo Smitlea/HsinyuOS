@@ -8,7 +8,7 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from sqlalchemy.orm import joinedload, selectinload
 from static.models import( db, Crane, User, DailyTask,
 CraneUsage, CraneNotice, CraneMaintenance, ConstructionSite, NoticeColor,
-_sum_usage_hours, _maintenance_threshold
+_sum_usage_hours, _pending_parts_in_current_cycle
 )
 from static.payload import (
     api_ns, api, api_crane, api_test, api_notice,
@@ -52,41 +52,55 @@ class ShowCranes(Resource):
 
 @api_crane.route('/api/cranes', methods=['GET', 'POST'])
 class Create_crane(Resource):
+    """
+    門檻：履帶式=450，小時；輪式=950 小時
+    注意：crane.crane_type 在 schema 是 Boolean（1=履帶, 0=輪式）
+    """
     @jwt_required()
     @handle_request_exception
     def get(self):
         try:
-            cranes = (
+            # 取回的是 list，不要叫 cranes 以免混淆
+            crane_list = (
                 Crane.query
-                .options(joinedload(Crane.site))   # 這裡不再 selectinload usages
+                .options(joinedload(Crane.site))
                 .all()
             )
+
             result = []
-            for cranes in cranes:
-                total_usage = _sum_usage_hours(cranes.id) or float(cranes.initial_hours)
-                threshold   = _maintenance_threshold(cranes)
+            for crane in crane_list:
+                # 逐台計算使用時數與門檻
+                total_usage = _sum_usage_hours(crane.id) or float(crane.initial_hours)
+                
+                threshold   = 450 if bool(crane.crane_type) else 950
+                _, _, pending = _pending_parts_in_current_cycle(crane.id, int(total_usage))
+
+                alert = (total_usage >= threshold) and bool(pending)
+
                 result.append({
-                    "id": cranes.id,
-                    "crane_number": cranes.crane_number,
-                    "crane_type": cranes.crane_type,
+                    "id": crane.id,
+                    "crane_number": crane.crane_number,
+                    "crane_type": crane.crane_type,
                     "site": {
-                        "id": cranes.site.id,
-                        "vendor": cranes.site.vendor,
-                        "location": cranes.site.location,
-                        "latitude": cranes.site.latitude,
-                        "longitude": cranes.site.longitude,
-                    } if cranes.site else None,
-                    "latitude": cranes.latitude,
-                    "longitude": cranes.longitude,
+                        "id": crane.site.id,
+                        "vendor": crane.site.vendor,
+                        "location": crane.site.location,
+                        "latitude": crane.site.latitude,
+                        "longitude": crane.site.longitude,
+                    } if crane.site else None,
+                    "latitude": crane.latitude,
+                    "longitude": crane.longitude,
                     "total_usage_hours": total_usage,
-                    "alert": total_usage >= threshold,   # 到門檻就提醒
+                    "threshold": threshold,
+                    "alert": alert,
                 })
+
             return {"status": "0", "result": result}, 200
+
         except Exception as e:
             error_class = e.__class__.__name__
             detail = e.args[0] if e.args else str(e)
-            logger.exception(f"Add Crane Error: [{type(e).__name__}] {detail}")
-            logger.warning(f"Get Crane Error: [{error_class}] detail: {detail}")
+            logger.exception(f"List Cranes Error: [{error_class}] {detail}")
             return {'status': 1, 'result': error_class, "error": e.args}, 400
         
     @api.expect(add_crane_payload)
@@ -130,8 +144,8 @@ class Create_crane(Resource):
 
             usage = CraneUsage(
                 crane_id=new_crane.id,
-                usage_date=date.today(),
-                daily_hours=8,
+                last_recalc_at=datetime.now(tz),        # ← DateTime，不要用 date.today()
+                total_hours=float(initial_hours or 0.0), # ← 以初始時數為基準
             )
             db.session.add(usage)
 
@@ -159,8 +173,9 @@ class Crane_detail(Resource):
                 return {"status": "1", "result": "找不到指定的吊車"}, 404
             
             total_usage = _sum_usage_hours(crane.id) or float(crane.initial_hours)
-            threshold   = _maintenance_threshold(crane)
-            alert = total_usage > threshold
+            threshold   = 450 if bool(crane.crane_type) else 950
+            _, _, pending = _pending_parts_in_current_cycle(crane.id, int(total_usage))
+            alert = (total_usage >= threshold) and bool(pending)
 
             base64_photos = photo_path_to_base64(crane.site.photo)
 
@@ -216,6 +231,7 @@ class Crane_detail(Resource):
              # ---------- 2. 更新基本欄位 ----------
             crane.crane_type = data.get('crane_type', crane.crane_type)
             crane.initial_hours = data.get('initial_hours', crane.initial_hours)
+
 
             # ---------- 3. 更新工地資訊與位置 ----------
             if new_site_id:
@@ -278,7 +294,7 @@ class Create_usage(Resource):
             } for t in tasks]
 
             total_usage = _sum_usage_hours(crane_id) or float(crane.initial_hours)
-            threshold   = _maintenance_threshold(crane)
+            threshold   = 450 if bool(crane.crane_type) else 950
 
             return {"status": "0", "result": {
                 "crane_id": crane_id,

@@ -127,14 +127,15 @@ class Crane(BaseTable):
 # ------------ Crane ←→ CraneUsage ------------ #
 class CraneUsage(BaseTable):
     """
-    每日使用小時紀錄：每個 crane_id 一天一筆或多筆的使用紀錄
-    - 預設每一天 +8 小時，可自由調整
+    （一對一快取）每台吊車一筆的『累計使用小時』
+    total_hours = crane.initial_hours + Σ DailyTask.work_time (is_deleted=False)
+    ※ 只存快取，不再存每日+8h
     """
     __tablename__ = 'crane_usages'
-    crane_id = db.Column(db.Integer, db.ForeignKey('cranes.id'), nullable=False)
-    usage_date = db.Column(db.Date, nullable=False, comment="使用日期")
-    daily_hours = db.Column(db.Integer, nullable=False, default=8, comment="當日使用小時(預設8)")
 
+    crane_id       = db.Column(db.Integer, db.ForeignKey('cranes.id'), nullable=False, unique=True)
+    total_hours    = db.Column(db.Float, nullable=False, default=0.0)
+    last_recalc_at = db.Column(db.DateTime(timezone=True), default=datetime.datetime.now(tz))
 
     # 多對一關係：一台吊車對多筆使用紀錄
     crane = db.relationship("Crane", back_populates="usages")
@@ -529,7 +530,7 @@ class SOPVideo(BaseTable):
 def _sum_usage_hours(crane_id: int) -> float | None:
     """
     總時數 = initial_hours + Σ DailyTask.work_time（is_deleted=False）
-    同步寫回一對一的 CraneHour（快取）
+    同步寫回一對一的 CraneUsage（快取）
     """
     crane = Crane.query.get(crane_id)
     if not crane:
@@ -542,54 +543,65 @@ def _sum_usage_hours(crane_id: int) -> float | None:
         DailyTask.is_deleted.is_(False)
     ).scalar() or 0.0
 
-    base = float(crane.initial_hours or 0.0)
+    base  = float(crane.initial_hours or 0.0)
     total = base + float(total_work)
 
-    if crane.hour is None:
-        crane.hour = CraneUsage(total_hours=total)
+    if crane.usages is None:
+        crane.usages = CraneUsage(crane_id=crane_id, total_hours=total)
     else:
-        crane.hour.total_hours = total
-        crane.hour.last_recalc_at = datetime.datetime.now(tz)
+        crane.usages.total_hours = total
+        crane.usages.last_recalc_at = datetime.datetime.now(tz)
 
     db.session.commit()
     return total
 
-def _maintenance_threshold(crane: "Crane") -> int:
+def _pending_parts_in_current_cycle(crane_id: int, total_hours: int | None = None):
     """
-    門檻：履帶式=450，小時；輪式=950 小時
-    注意：crane.crane_type 在 schema 是 Boolean（1=履帶, 0=輪式）
+    回傳 (info, due_parts, pending_parts)
+    - info: _cycle_info(...) 的結果
+    - due_parts: 本週期理應要更換的零件（代碼清單）
+    - pending_parts: 該週期尚未更換的零件（代碼清單）
     """
-    return 450 if bool(crane.crane_type) else 950
+    crane = Crane.query.get(crane_id)
+    if not crane:
+        return None, [], []
 
+    # 若沒給 total_hours，幫忙算；這也會同步快取到 CraneUsage
+    if total_hours is None:
+        total_hours = _sum_usage_hours(crane_id)
+        if total_hours is None:
+            return None, [], []
 
-# ────────── 週期常數與規則 ──────────
+    info = _cycle_info(int(total_hours))
+    due_parts = _due_parts_for_cycle(info["cycle_index"])
+
+    # 此吊車該週期內已經更換過的零件
+    records = (
+        MaintenanceRecord.query
+        .filter(
+            MaintenanceRecord.crane_id == crane_id,
+            MaintenanceRecord.maintenance_hours >= info["cycle_start"],
+            MaintenanceRecord.maintenance_hours <  info["cycle_end"],
+        ).all()
+    )
+    already = set()
+    for r in records:
+        if r.parts:
+            already.update(r.parts)
+
+    pending = [p for p in due_parts if p not in already]
+    return info, sorted(due_parts), sorted(pending)
+
+# ────────── 常數（與你原本一致） ──────────
 CYCLE_HOURS = 500
 CYCLES_PER_ROUND = 12
 ROUND_HOURS = CYCLE_HOURS * CYCLES_PER_ROUND  # 6000
 
-PART_LABELS = {
-    "engine_oil": "機油",
-    "main_hoist_gear_oil": "主捲齒輪油",
-    "lion_head_gear_oil": "獅頭齒輪油",
-    "aux_hoist_gear_oil": "補捲齒輪油",
-    "luffing_gear_oil": "起伏齒輪油",
-    "slewing_gear_oil": "旋回齒輪油",
-    "circulation_oil": "循環油",
-    "belts": "皮帶",
-    "sprocket": "齒盤",
-    "sprocket_oiling": "齒盤上油",
-}
-
-# 需要紀錄的濾心（與哪些油品一起更換）
+# 需要紀錄的濾心（代碼）
 CONSUMABLES_HINTS = {
-    "engine_oil": ["engine_oil_filter"],  # 機油濾心
-    # 循環油：排水、進油、回油濾心
-    "circulation_oil": ["circulation_drain_filter", "circulation_inlet_filter", "circulation_return_filter"],
+    "engine_oil": ["engine_oil_filter", "fuel_oil_filter"],
+    "circulation_oil": ["braker_drain_filter", "circulation_drain_filter", "circulation_inlet_filter", "circulation_return_filter"],
 }
-
-ALLOWED_PARTS = set(PART_LABELS.keys())
-ALLOWED_CONSUMABLES = {"engine_oil_filter", "circulation_drain_filter", "circulation_inlet_filter", "circulation_return_filter"}
-
 
 
 def _cycle_info(total_hours: int) -> dict:
@@ -600,9 +612,9 @@ def _cycle_info(total_hours: int) -> dict:
     - cycle_start, cycle_end: 本週期的小時範圍 [start, end)
     """
     # 本輪偏移
-    offset = total_hours % ROUND_HOURS  # 0~5999
+    offset = total_hours % ROUND_HOURS  # 0~5000
     cycle_index = (offset // CYCLE_HOURS) + 1  # 1..12
-    round_base = total_hours - offset          # 0, 6000, 12000, ...
+    round_base = total_hours - offset          # 0, 5000, 10000, ...
     cycle_start = round_base + (cycle_index - 1) * CYCLE_HOURS
     cycle_end = cycle_start + CYCLE_HOURS
     return {
@@ -631,12 +643,6 @@ def _due_parts_for_cycle(cycle_index: int) -> list[str]:
     if cycle_index == 12:
         due.update({"belts", "sprocket", "sprocket_oiling"})
     return sorted(due)
-
-def _consumables_hints_for_parts(parts: list[str]) -> list[str]:
-    hints: list[str] = []
-    for p in parts:
-        hints.extend(CONSUMABLES_HINTS.get(p, []))
-    return sorted(set(hints))
 
 # ────────── 保養紀錄模型 ──────────
 class MaintenanceRecord(BaseTable):
