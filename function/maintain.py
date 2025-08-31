@@ -105,7 +105,69 @@ def _code_label_list(codes: list[str], kind: str = "part") -> list[dict]:
     else:
         return [CONSUMABLE_LABELS.get(c, c) for c in codes]
 
+# 小工具：前端展示的 parts（代碼→中文，並依規則加上濾芯）
+# 規則：
+# - 若本期曾更換 engine_oil → 顯示「機油芯」「柴油芯」「機油」
+# - 若本期曾更換 circulation_oil → 顯示「煞車」「排水」「進油」「回油」「循環油」
+# - 其他齒輪油/皮帶 → 直接用 PART_LABELS
+def _frontend_parts_labels(already_parts: set[str], already_cons: set[str]) -> list[str]:
+        """
+        把同週期內「已完成」的 部件＋耗材 轉為中文顯示清單。
+        - 有主件（engine_oil / circulation_oil）時：濾芯先列，再列主件。
+        - 也會把「獨立記錄的耗材」補上（即使沒有主件也會顯示）。
+        """
+        labels: list[str] = []
 
+        # 先處理一般部件（齒輪油、皮帶）
+        for code in [
+            "main_hoist_gear_oil",  # 主捲
+            "lion_head_gear_oil",   # 獅頭
+            "aux_hoist_gear_oil",   # 補捲
+            "luffing_gear_oil",     # 起伏
+            "slewing_gear_oil",     # 旋回
+            "belts"                 # 皮帶齒盤
+        ]:
+            if code in already_parts:
+                labels.append(PART_LABELS.get(code, code))
+
+        # engine_oil：濾芯先列，再列主項
+        if "engine_oil" in already_parts:
+            labels.extend([
+                CONSUMABLE_LABELS["engine_oil_filter"],  # 機油芯
+                CONSUMABLE_LABELS["fuel_oil_filter"],    # 柴油芯
+                PART_LABELS["engine_oil"],               # 機油
+            ])
+
+        # circulation_oil：四個濾芯先列，再列主項
+        if "circulation_oil" in already_parts:
+            labels.extend([
+                CONSUMABLE_LABELS["braker_drain_filter"],      # 煞車
+                CONSUMABLE_LABELS["circulation_drain_filter"], # 排水
+                CONSUMABLE_LABELS["circulation_inlet_filter"], # 進油
+                CONSUMABLE_LABELS["circulation_return_filter"],# 回油
+                PART_LABELS["circulation_oil"],                # 循環油
+            ])
+
+        # 把「獨立記錄的耗材」也補上（即使沒有主件）
+        # 用固定順序，避免顯示順序不穩定
+        for c in [
+            "engine_oil_filter",
+            "fuel_oil_filter",
+            "braker_drain_filter",
+            "circulation_drain_filter",
+            "circulation_inlet_filter",
+            "circulation_return_filter",
+        ]:
+            if c in already_cons:
+                labels.append(CONSUMABLE_LABELS.get(c, c))
+
+        # 去重保序
+        seen, ordered = set(), []
+        for s in labels:
+            if s not in seen:
+                seen.add(s)
+                ordered.append(s)
+        return ordered
 # =================================================================
 #  GET：單一吊車維護總覽（適合你的單車 UI）
 #    /api/cranes/<crane_id>/maintenance  [GET]
@@ -138,52 +200,6 @@ class CraneMaintenanceCreate(Resource):
                       MaintenanceRecord.id.desc())
             .all()
         )
-
-        # 小工具：前端展示的 parts（代碼→中文，並依規則加上濾芯）
-        # 規則：
-        # - 若本期曾更換 engine_oil → 顯示「機油芯」「柴油芯」「機油」
-        # - 若本期曾更換 circulation_oil → 顯示「煞車」「排水」「進油」「回油」「循環油」
-        # - 其他齒輪油/皮帶 → 直接用 PART_LABELS
-        def _frontend_parts_labels(already_parts: set[str]) -> list[str]:
-            labels: list[str] = []
-
-            # 先處理一般部件（齒輪油、皮帶）
-            for code in [
-                "main_hoist_gear_oil",  # 主捲
-                "lion_head_gear_oil",   # 獅頭
-                "aux_hoist_gear_oil",   # 補捲
-                "luffing_gear_oil",     # 起伏
-                "slewing_gear_oil",     # 旋回
-                "belts"                 # 皮帶齒盤
-            ]:
-                if code in already_parts:
-                    labels.append(PART_LABELS.get(code, code))
-
-            # engine_oil：濾芯先列，再列主項
-            if "engine_oil" in already_parts:
-                labels.extend([
-                    CONSUMABLE_LABELS["engine_oil_filter"],  # 機油芯
-                    CONSUMABLE_LABELS["fuel_oil_filter"],    # 柴油芯
-                    PART_LABELS["engine_oil"],               # 機油（主項）
-                ])
-
-            # circulation_oil：四個濾芯先列，再列主項
-            if "circulation_oil" in already_parts:
-                labels.extend([
-                    CONSUMABLE_LABELS["braker_drain_filter"],      # 煞車
-                    CONSUMABLE_LABELS["circulation_drain_filter"], # 排水
-                    CONSUMABLE_LABELS["circulation_inlet_filter"], # 進油
-                    CONSUMABLE_LABELS["circulation_return_filter"],# 回油
-                    PART_LABELS["circulation_oil"],                # 循環油（主項）
-                ])
-
-            # 去重保序
-            seen, ordered = set(), []
-            for s in labels:
-                if s not in seen:
-                    seen.add(s)
-                    ordered.append(s)
-            return ordered
 
         # 先把「同車＋同週期」已更換零件聚合，供後面算 pending 用
         # key = (cycle_start, cycle_end, cycle_index)
@@ -221,6 +237,8 @@ class CraneMaintenanceCreate(Resource):
                 [PART_LABELS.get(c, c) for c in pending_part_codes] +
                 [CONSUMABLE_LABELS.get(c, c) for c in pending_cons_codes]              
             )
+            already_labels = _frontend_parts_labels(already_parts, already_cons)
+
 
 
             result.append({
@@ -229,7 +247,7 @@ class CraneMaintenanceCreate(Resource):
                 "date": r.record_date.isoformat(),
                 "maintain_hour": r.maintenance_hours,
                 "cycle": info["cycle_index"],
-                "parts": _frontend_parts_labels(r.parts or []),  # 仍保留你現有的「中文＋濾芯展開」
+                "parts": already_labels, # 仍保留你現有的「中文＋濾芯展開」
                 "pending_parts": pending_labels,                  # ← 現在會包含「排水／進油／回油」
             })
 
@@ -413,7 +431,7 @@ class MaintenanceRecordGet(Resource):
             "date": r.record_date.isoformat(),
             "maintain_hour": r.maintenance_hours,
             "cycle": idx,
-            "parts": _frontend_parts_labels(r.parts or []),
+            "parts": _frontend_parts_labels(already_parts, already_cons),
             "pending_parts": pending_labels,
         }
         return {"status": "0", "result": [result]}, 200
@@ -473,8 +491,11 @@ class MaintenanceRecordUpdate(Resource):
         else:
             cons_codes = r.consumables or []
 
-        # 週期 & 「同週期避免重複更換」
-        hours_for_cycle = int(maintenance_hours if maintenance_hours is not None else r.maintenance_hours)
+        # 週期 & 同週期避免重複更換：計算要寫入的 new_part_codes 與回報用 skipped_codes
+        hours_for_cycle = int(r.maintenance_hours)
+        if maintenance_hours is not None:
+            hours_for_cycle = int(maintenance_hours)
+
         info = _cycle_info(hours_for_cycle)
         existing = (
             MaintenanceRecord.query
@@ -491,14 +512,16 @@ class MaintenanceRecordUpdate(Resource):
                 replaced_codes.update(e.parts)
 
         new_part_codes = [p for p in part_codes if p not in replaced_codes]
+        # parts_in 可能是 None，為避免未定義，這裡保證 skipped_codes 一定存在
         skipped_codes = [p for p in (parts_in or []) if p in replaced_codes] if parts_in is not None else []
 
-        # 若未傳 consumables，依實際要換的零件自動補
+        # 若未傳 consumables，依「實際要換的零件」自動補（包含你剛剛過濾後的 new_part_codes）
         if consumables_in is None:
             auto_cons = _consumables_hints_for_parts(new_part_codes or part_codes)
+            # 舊資料 + 自動補的去重
             cons_codes = list(dict.fromkeys((r.consumables or []) + auto_cons))
 
-        # 寫入
+        # 寫入 DB
         r.parts = new_part_codes or part_codes
         r.consumables = cons_codes or None
         if note is not None:
@@ -506,50 +529,27 @@ class MaintenanceRecordUpdate(Resource):
 
         db.session.commit()
 
-        # 前端顯示的 parts 陣列（中文 + 依規則追加濾心）
-        def _frontend_parts_labels(parts_codes: list[str]) -> list[str]:
-            parts_codes = set(parts_codes or [])
-            labels: list[str] = []
-
-            if "main_hoist_gear_oil" in parts_codes:
-                labels.append(PART_LABELS["main_hoist_gear_oil"])  # 主捲
-            if "lion_head_gear_oil" in parts_codes:
-                labels.append(PART_LABELS["lion_head_gear_oil"])   # 獅頭
-            if "aux_hoist_gear_oil" in parts_codes:
-                labels.append(PART_LABELS["aux_hoist_gear_oil"])   # 補捲
-            if "luffing_gear_oil" in parts_codes:
-                labels.append(PART_LABELS["luffing_gear_oil"])     # 起伏
-            if "slewing_gear_oil" in parts_codes:
-                labels.append(PART_LABELS["slewing_gear_oil"])     # 旋回
-
-            if "engine_oil" in parts_codes:
-                labels.extend([
-                    CONSUMABLE_LABELS["engine_oil_filter"],  # 機油芯
-                    CONSUMABLE_LABELS["fuel_oil_filter"],    # 柴油芯
-                ])
-            if "circulation_oil" in parts_codes:
-                labels.extend([
-                    CONSUMABLE_LABELS["braker_drain_filter"],      # 煞車
-                    CONSUMABLE_LABELS["circulation_drain_filter"], # 排水
-                    CONSUMABLE_LABELS["circulation_inlet_filter"], # 進油
-                    CONSUMABLE_LABELS["circulation_return_filter"] # 回油
-                ])
-            if "belts" in parts_codes:
-                labels.append(PART_LABELS["belts"])  # 皮帶齒盤
-
-            seen = set()
-            out = []
-            for s in labels:
-                if s not in seen:
-                    seen.add(s)
-                    out.append(s)
-            return out
+        # 重新以這筆紀錄的 hours 計算週期，並聚合同週期的「已完成部件＆耗材」
+        info = _cycle_info(int(r.maintenance_hours))
+        same_cycle_records = (
+            MaintenanceRecord.query
+            .filter(
+                MaintenanceRecord.crane_id == r.crane_id,
+                MaintenanceRecord.maintenance_hours >= info["cycle_start"],
+                MaintenanceRecord.maintenance_hours <  info["cycle_end"],
+            ).all()
+        )
+        already_parts, already_cons = set(), set()
+        for x in same_cycle_records:
+            if x.parts:       already_parts.update(x.parts)
+            if x.consumables: already_cons.update(x.consumables)
 
         result = {
-            "id": r.crane_id,
+            "id": r.id,  # 若前端要車 id 改成 r.crane_id
             "date": r.record_date.isoformat(),
             "maintain_hour": r.maintenance_hours,
-            "parts": _frontend_parts_labels(r.parts or []),
+            # parts = 同週期聚合（含獨立耗材；油品則濾芯先列、主件後列）
+            "parts": _frontend_parts_labels(already_parts, already_cons),
         }
         return {
             "status": "0",
