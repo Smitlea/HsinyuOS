@@ -359,39 +359,6 @@ class MaintenanceRecordGet(Resource):
         if not r:
             return {"status": "1", "result": f"找不到保養紀錄 id={record_id}"}, 404
 
-        # 小工具：前端顯示的 parts（代碼→中文，並依規則加上濾芯）
-        def _frontend_parts_labels(parts_codes: list[str]) -> list[str]:
-            parts_codes = set(parts_codes or [])
-            labels: list[str] = []
-            if "main_hoist_gear_oil" in parts_codes:
-                labels.append(PART_LABELS["main_hoist_gear_oil"])  # 主捲
-            if "lion_head_gear_oil" in parts_codes:
-                labels.append(PART_LABELS["lion_head_gear_oil"])   # 獅頭
-            if "aux_hoist_gear_oil" in parts_codes:
-                labels.append(PART_LABELS["aux_hoist_gear_oil"])   # 補捲
-            if "luffing_gear_oil" in parts_codes:
-                labels.append(PART_LABELS["luffing_gear_oil"])     # 起伏
-            if "slewing_gear_oil" in parts_codes:
-                labels.append(PART_LABELS["slewing_gear_oil"])     # 旋回
-            if "engine_oil" in parts_codes:
-                labels.extend([CONSUMABLE_LABELS["engine_oil_filter"],
-                               CONSUMABLE_LABELS["fuel_oil_filter"]])
-            if "circulation_oil" in parts_codes:
-                labels.extend([
-                    CONSUMABLE_LABELS["braker_drain_filter"],
-                    CONSUMABLE_LABELS["circulation_drain_filter"],
-                    CONSUMABLE_LABELS["circulation_inlet_filter"],
-                    CONSUMABLE_LABELS["circulation_return_filter"],
-                ])
-            if "belts" in parts_codes:
-                labels.append(PART_LABELS["belts"])
-            # 去重保序
-            seen, out = set(), []
-            for s in labels:
-                if s not in seen:
-                    seen.add(s); out.append(s)
-            return out
-
         # 以該筆 maintenance_hours 算週期
         info = _cycle_info(int(r.maintenance_hours))
         key_start, key_end, idx = info["cycle_start"], info["cycle_end"], info["cycle_index"]
@@ -431,6 +398,7 @@ class MaintenanceRecordGet(Resource):
             "date": r.record_date.isoformat(),
             "maintain_hour": r.maintenance_hours,
             "cycle": idx,
+            # 這裡會呼叫到「全域版」_frontend_parts_labels(already_parts, already_cons)
             "parts": _frontend_parts_labels(already_parts, already_cons),
             "pending_parts": pending_labels,
         }
