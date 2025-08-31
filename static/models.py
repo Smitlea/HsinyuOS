@@ -641,7 +641,7 @@ def _due_parts_for_cycle(cycle_index: int) -> list[str]:
     if cycle_index % 4 == 0:
         due.add("circulation_oil")
     if cycle_index == 12:
-        due.update({"belts", "sprocket", "sprocket_oiling"})
+        due.update({"belts"})
     return sorted(due)
 
 # ────────── 保養紀錄模型 ──────────

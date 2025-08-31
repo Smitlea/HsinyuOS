@@ -140,35 +140,42 @@ class CraneMaintenanceCreate(Resource):
         )
 
         # 小工具：前端展示的 parts（代碼→中文，並依規則加上濾芯）
-        def _frontend_parts_labels(parts_codes: list[str]) -> list[str]:
-            parts_codes = set(parts_codes or [])
+        # 規則：
+        # - 若本期曾更換 engine_oil → 顯示「機油芯」「柴油芯」「機油」
+        # - 若本期曾更換 circulation_oil → 顯示「煞車」「排水」「進油」「回油」「循環油」
+        # - 其他齒輪油/皮帶 → 直接用 PART_LABELS
+        def _frontend_parts_labels(already_parts: set[str]) -> list[str]:
             labels: list[str] = []
 
-            if "main_hoist_gear_oil" in parts_codes:
-                labels.append(PART_LABELS["main_hoist_gear_oil"])  # 主捲
-            if "lion_head_gear_oil" in parts_codes:
-                labels.append(PART_LABELS["lion_head_gear_oil"])   # 獅頭
-            if "aux_hoist_gear_oil" in parts_codes:
-                labels.append(PART_LABELS["aux_hoist_gear_oil"])   # 補捲
-            if "luffing_gear_oil" in parts_codes:
-                labels.append(PART_LABELS["luffing_gear_oil"])     # 起伏
-            if "slewing_gear_oil" in parts_codes:
-                labels.append(PART_LABELS["slewing_gear_oil"])     # 旋回
+            # 先處理一般部件（齒輪油、皮帶）
+            for code in [
+                "main_hoist_gear_oil",  # 主捲
+                "lion_head_gear_oil",   # 獅頭
+                "aux_hoist_gear_oil",   # 補捲
+                "luffing_gear_oil",     # 起伏
+                "slewing_gear_oil",     # 旋回
+                "belts"                 # 皮帶齒盤
+            ]:
+                if code in already_parts:
+                    labels.append(PART_LABELS.get(code, code))
 
-            if "engine_oil" in parts_codes:
+            # engine_oil：濾芯先列，再列主項
+            if "engine_oil" in already_parts:
                 labels.extend([
                     CONSUMABLE_LABELS["engine_oil_filter"],  # 機油芯
                     CONSUMABLE_LABELS["fuel_oil_filter"],    # 柴油芯
+                    PART_LABELS["engine_oil"],               # 機油（主項）
                 ])
-            if "circulation_oil" in parts_codes:
+
+            # circulation_oil：四個濾芯先列，再列主項
+            if "circulation_oil" in already_parts:
                 labels.extend([
                     CONSUMABLE_LABELS["braker_drain_filter"],      # 煞車
                     CONSUMABLE_LABELS["circulation_drain_filter"], # 排水
                     CONSUMABLE_LABELS["circulation_inlet_filter"], # 進油
-                    CONSUMABLE_LABELS["circulation_return_filter"] # 回油
+                    CONSUMABLE_LABELS["circulation_return_filter"],# 回油
+                    PART_LABELS["circulation_oil"],                # 循環油（主項）
                 ])
-            if "belts" in parts_codes:
-                labels.append(PART_LABELS["belts"])               # 皮帶齒盤
 
             # 去重保序
             seen, ordered = set(), []
