@@ -80,6 +80,7 @@ class AnnouncementList(Resource):
             title=data["title"],
             content=data["content"],
             status=data["status"],
+            record_date = data['record_date'],
             latitude=latitude,
             longitude=longitude,
             created_by=user.id,
@@ -116,6 +117,9 @@ class AnnouncementDetail(Resource):
             return {"status": "1", "result": "使用者權限不足"}, 403
 
         data = request.get_json()
+
+        announcement.record_date = data.get("record_date")
+
         try:
             if coord := data.get("coordinates"):
                 lat, lon = map(str.strip, coord.split(","))
