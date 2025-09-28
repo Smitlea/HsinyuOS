@@ -5,7 +5,9 @@ import pytz
 
 from flask_restx import Resource
 from flask_jwt_extended import jwt_required, get_jwt_identity
+from sqlalchemy import func
 from sqlalchemy.orm import joinedload, selectinload
+
 from static.models import( db, Crane, User, DailyTask,
 CraneUsage, CraneNotice, CraneMaintenance, ConstructionSite, NoticeColor,
 _sum_usage_hours, _pending_parts_in_current_cycle
@@ -29,6 +31,81 @@ tz = pytz.timezone('Asia/Taipei')
 PHOTO_DIR = "static/crane_photos"
 NOTICE_DIR = "static/crane_notices"
 MAINTANCE_DIR = "static/crane_maintenances"
+
+
+# ======= 總覽統計（不依賴 SiteCollection / 直接查 DB） =======
+@api_ns.route("/api/stats", methods=["GET"])
+class Stats(Resource):
+    @jwt_required()
+    @handle_request_exception
+    def get(self):
+        # 直接查所有吊車，計算用量 / 門檻 / alert
+        crane_list = (
+            Crane.query
+            .options(joinedload(Crane.site))
+            .all()
+        )
+
+        total_cranes = len(crane_list)
+
+        total_usage_hours = 0.0
+        pending_maintenance = 0
+        for crane in crane_list:
+            total_usage = _sum_usage_hours(crane.id) or float(crane.initial_hours or 0)
+            threshold   = 450 if bool(crane.crane_type) else 950
+            _, _, pending = _pending_parts_in_current_cycle(crane.id, int(total_usage))
+            alert = (total_usage >= threshold) and bool(pending)
+
+            total_usage_hours += float(total_usage)
+            if alert or (total_usage >= threshold):
+                pending_maintenance += 1
+
+        # 直接用 ConstructionSite 計數（排除已刪除）
+        active_sites = (
+            db.session.query(func.count(ConstructionSite.id))
+            .filter(ConstructionSite.is_deleted == False)
+            .scalar()
+        ) or 0
+
+        return {
+            "status": "0",
+            "result": {
+                "totalCranes": total_cranes,
+                "activeSites": active_sites,
+                "pendingMaintenance": pending_maintenance,
+                "totalUsageHours": total_usage_hours,
+            }
+        }, 200
+
+
+
+# ======= 新增：最新注意事項列表（全吊車） =======
+@api.route("/api/notices/recent")
+class RecentNotices(Resource):
+    @jwt_required()
+    @handle_request_exception
+    def get(self):
+        limit = int((api.payload or {}) .get("limit", 10)) if api.payload else 10
+
+        q = (
+            db.session.query(CraneNotice, Crane.crane_number)
+            .join(Crane, CraneNotice.crane_id == Crane.id)
+            .filter(CraneNotice.is_deleted == False)
+            .order_by(CraneNotice.notice_date.desc(), CraneNotice.id.desc())
+            .limit(limit)
+            .all()
+        )
+        result = []
+        for n, crane_number in q:
+            result.append({
+                "id": n.id,
+                "crane": crane_number,
+                "status": n.status,
+                "title": n.title,
+                "date": n.notice_date.isoformat(),
+            })
+        return {"status": "0", "result": result}, 200
+
 
 @api_crane.route("/api/show_cranes", methods=["GET"])
 class ShowCranes(Resource):
