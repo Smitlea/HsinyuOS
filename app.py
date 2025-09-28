@@ -29,6 +29,7 @@ from function.location import *
 from function.fuel import *
 from function.hr import *
 from function.maintain import *
+from function.export_excel import *
 from static.models import db, User, UserProfile
 from static.logger import logging
 from static.util import handle_request_exception
