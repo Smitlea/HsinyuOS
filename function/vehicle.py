@@ -32,24 +32,17 @@ PHOTO_DIR = "static/crane_photos"
 NOTICE_DIR = "static/crane_notices"
 MAINTANCE_DIR = "static/crane_maintenances"
 
-
-# ======= 總覽統計（不依賴 SiteCollection / 直接查 DB） =======
 @api_ns.route("/api/stats", methods=["GET"])
 class Stats(Resource):
     @jwt_required()
     @handle_request_exception
     def get(self):
-        # 直接查所有吊車，計算用量 / 門檻 / alert
-        crane_list = (
-            Crane.query
-            .options(joinedload(Crane.site))
-            .all()
-        )
-
+        crane_list = Crane.query.options(joinedload(Crane.site)).all()
         total_cranes = len(crane_list)
 
         total_usage_hours = 0.0
         pending_maintenance = 0
+
         for crane in crane_list:
             total_usage = _sum_usage_hours(crane.id) or float(crane.initial_hours or 0)
             threshold   = 450 if bool(crane.crane_type) else 950
@@ -60,7 +53,6 @@ class Stats(Resource):
             if alert or (total_usage >= threshold):
                 pending_maintenance += 1
 
-        # 直接用 ConstructionSite 計數（排除已刪除）
         active_sites = (
             db.session.query(func.count(ConstructionSite.id))
             .filter(ConstructionSite.is_deleted == False)
@@ -79,13 +71,15 @@ class Stats(Resource):
 
 
 
-# ======= 新增：最新注意事項列表（全吊車） =======
+from flask import request
+
 @api.route("/api/notices/recent")
 class RecentNotices(Resource):
     @jwt_required()
     @handle_request_exception
     def get(self):
-        limit = int((api.payload or {}) .get("limit", 10)) if api.payload else 10
+        # 從 query string 抓 limit，預設 10
+        limit = request.args.get("limit", default=10, type=int)
 
         q = (
             db.session.query(CraneNotice, Crane.crane_number)
@@ -95,16 +89,19 @@ class RecentNotices(Resource):
             .limit(limit)
             .all()
         )
-        result = []
-        for n, crane_number in q:
-            result.append({
+
+        result = [
+            {
                 "id": n.id,
                 "crane": crane_number,
                 "status": n.status,
                 "title": n.title,
                 "date": n.notice_date.isoformat(),
-            })
+            }
+            for n, crane_number in q
+        ]
         return {"status": "0", "result": result}, 200
+
 
 
 @api_crane.route("/api/show_cranes", methods=["GET"])
@@ -501,9 +498,9 @@ class Create_notice(Resource):
             
             notices = (
                 CraneNotice.query
-                .filter_by(crane_id=crane_id)
+                .filter_by(crane_id=crane_id, is_deleted=False)
                 # .filter(CraneNotice.notice_date >= cutoff_date)
-                .order_by(CraneNotice.notice_date.desc())
+                .order_by(CraneNotice.notice_date.desc(), CraneNotice.id.desc())
                 .all()
             )
             

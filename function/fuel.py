@@ -240,7 +240,7 @@ class FuelRecordList(Resource):
         if not Truck.query.get(truck_id):
             return {"status": 1, "result": "找不到指定貨車"}, 404
         rows = TruckFuelRecord.query.filter(
-                truck_id == truck_id,
+                TruckFuelRecord.truck_id == truck_id,
                 TruckFuelRecord.is_deleted == False
             ).order_by(TruckFuelRecord.record_date.desc()).all()
         return {"status": "0", "result": [
