@@ -2,7 +2,7 @@
 from __future__ import annotations
 import io
 import datetime as dt
-from collections import defaultdict
+from collections import deque, defaultdict, OrderedDict
 
 import pytz
 import pandas as pd
@@ -74,21 +74,33 @@ def _send_df_as_excel(df: pd.DataFrame, filename: str, sheet_name: str,
         max_age=0
     )
 
+
+def norm_key(date, crane_id, site_id=None):
+    """把 key 元素都標準化為 (date, str(crane_id), str(site_id) or None)"""
+    return (
+        date,
+        str(crane_id) if crane_id is not None else None,
+        str(site_id) if site_id is not None else None,
+    )
+
+def norm_key_date_crane(date, crane_id):
+    return (date, str(crane_id) if crane_id is not None else None)
 # ---------- 1) 日常登記 ----------
+# 假設 db, DailyTask, WorkRecord, MaintenanceRecord, User, _parse_year, _send_df_as_excel 都已在你的模組中定義/匯入
+
+def to_date(x):
+    # 避免 date/datetime 混用導致 key 對不到
+    return x.date() if hasattr(x, "date") else x
+
+def norm_dc(dt, crane_id):
+    return (to_date(dt), crane_id)
+
 @api.route("/api/export/daily")
 class ExportDaily(Resource):
     def get(self):
-        """
-        欄位：日期, 廠商, 車號, 地點, 人員, 時數, 吊怪手200, 吊怪手120,
-            輔助人員A, 輔助人員B, 輔助人員C, 輔助人員D, 當日保養, 備註
-        來源：
-        - DailyTask（工作時數、廠商、地點、備註、車號、日期）
-        - WorkRecord（吊怪手200/120、輔助人員、備註），以 日期+crane_id+site_id 合併
-        - TaskMaintenance（當日保養：同日同場地/同車之描述合併）
-        """
         year, start, end = _parse_year()
 
-        # 取 DailyTask 基底
+        # 取 DailyTask
         daily_rows = (
             db.session.query(DailyTask)
             .options(
@@ -98,76 +110,196 @@ class ExportDaily(Resource):
             )
             .filter(
                 DailyTask.is_deleted.is_(False),
-                and_(DailyTask.task_date >= start, DailyTask.task_date <= end)
+                and_(DailyTask.task_date >= start, DailyTask.task_date <= end),
             )
             .all()
         )
 
-        # WorkRecord 做成查表：key=(date, crane_id, site_id)
-        wr_by_key = {}
-        for wr in db.session.query(WorkRecord)\
-            .options(joinedload(WorkRecord.crane), joinedload(WorkRecord.site), joinedload(WorkRecord.updater))\
+        # 取 WorkRecord
+        wr_rows = (
+            db.session.query(WorkRecord)
+            .options(
+                joinedload(WorkRecord.crane),
+                joinedload(WorkRecord.site),
+                joinedload(WorkRecord.updater),
+            )
             .filter(
                 WorkRecord.is_deleted.is_(False),
-                and_(WorkRecord.record_date >= start, WorkRecord.record_date <= end)
-            ).all():
-            k = (wr.record_date, wr.crane_id, wr.site_id)
-            wr_by_key[k] = wr
+                and_(WorkRecord.record_date >= start, WorkRecord.record_date <= end),
+            )
+            .all()
+        )
 
-        # TaskMaintenance 當日保養：key=(date) 或 (date, site_id/crane_id)；實務上常用日期聚合
-        maint_by_date = defaultdict(list)
-        for tm in db.session.query(TaskMaintenance)\
-            .filter(
-                TaskMaintenance.is_deleted.is_(False),
-                and_(TaskMaintenance.record_date >= start, TaskMaintenance.record_date <= end)
-            ).all():
-            maint_by_date[tm.record_date].append(tm.description.strip())
+        # MaintenanceRecord index by (record_date, crane_id)
+        maint_by_key = defaultdict(list)
+        mr_rows = (
+            db.session.query(MaintenanceRecord)
+            .filter(and_(MaintenanceRecord.record_date >= start, MaintenanceRecord.record_date <= end))
+            .all()
+        )
+        for mr in mr_rows:
+            maint_by_key[(to_date(mr.record_date), mr.crane_id)].append(mr)
+
+        # assistants id 蒐集 + user_map
+        all_assistant_ids = set()
+        for wr in wr_rows:
+            for a in (wr.assistants or []):
+                if isinstance(a, int):
+                    all_assistant_ids.add(a)
+
+        user_map = {}
+        if all_assistant_ids:
+            users = db.session.query(User).filter(User.id.in_(list(all_assistant_ids))).all()
+            user_map = {u.id: (u.nickname or u.username) for u in users}
+
+        def resolve_assistants_name(assistants_list):
+            seen = OrderedDict()
+            for a in assistants_list:
+                if isinstance(a, int):
+                    name = user_map.get(a)
+                    seen[name or str(a)] = None
+                else:
+                    seen[str(a)] = None
+            return list(seen.keys())
+
+        # --- 核心：用 (date, crane) 分群，保證 WorkRecord 都會被輸出 ---
+        daily_by_dc = defaultdict(list)
+        for d in daily_rows:
+            daily_by_dc[norm_dc(d.task_date, d.crane_id)].append(d)
+
+        wr_by_dc = defaultdict(list)
+        for wr in wr_rows:
+            wr_by_dc[norm_dc(wr.record_date, wr.crane_id)].append(wr)
+
+        # union keys：只要在 range 內出現過 DailyTask 或 WorkRecord 都會處理到
+        all_keys = sorted(set(daily_by_dc.keys()) | set(wr_by_dc.keys()), key=lambda k: (k[0], k[1] or 0))
 
         records = []
-        for d in daily_rows:
-            k = (d.task_date, d.crane_id, d.site_id)
-            wr = wr_by_key.get(k)
 
-            assistants = (wr.assistants or []) if wr else []
-            # 如果 assistants 是 user.id 陣列，取暱稱
-            def _id_to_name(uid):
-                u = db.session.get(User, uid)
-                return (u.nickname or u.username) if u else None
-            names = []
-            for uid in assistants:
-                if isinstance(uid, int):
-                    names.append(_id_to_name(uid))
+        for (dt, crane_id) in all_keys:
+            d_list = daily_by_dc.get((dt, crane_id), [])
+            w_list = wr_by_dc.get((dt, crane_id), [])
+
+            # 當日保養（同日同車）
+            has_maintenance = bool(maint_by_key.get((dt, crane_id), []))
+
+            # WorkRecord 依 site 分桶（精準配對用）
+            wrs_by_site = defaultdict(deque)
+            wrs_no_site = deque()
+
+            for wr in w_list:
+                if wr.site_id:
+                    wrs_by_site[wr.site_id].append(wr)
                 else:
-                    names.append(str(uid))
-            # 填滿 A~D
-            names = (names + [None, None, None, None])[:4]
+                    wrs_no_site.append(wr)
 
-            records.append({
-                "日期": d.task_date,
-                "廠商": d.vendor,
-                "車號": d.crane.crane_number if d.crane else None,
-                "地點": d.site.location if d.site else None,
-                "人員": d.updated_by_nickname,  # 或者可改用建立者暱稱
-                "時數": d.work_time,
-                "吊怪手200": wr.qty_200 if wr else None,
-                "吊怪手120": wr.qty_120 if wr else None,
-                "輔助人員A": names[0],
-                "輔助人員B": names[1],
-                "輔助人員C": names[2],
-                "輔助人員D": names[3],
-                "當日保養": "、".join(maint_by_date.get(d.task_date, [])) or None,
-                "備註": wr.note if (wr and wr.note) else d.note,
-            })
+            # 1) 先輸出所有 DailyTask（一般工作列）
+            #    並且把「同日同車同site」的 WorkRecord 先吃掉輸出（精準配對）
+            for d in d_list:
+                records.append({
+                    "日期": to_date(d.task_date),
+                    "廠商": d.vendor,
+                    "車號": d.crane.crane_number if d.crane else None,
+                    "地點": d.site.location if d.site else None,
+                    "人員": d.updated_by_nickname,
+                    "時數": d.work_time,
+                    "吊怪手200": None,
+                    "吊怪手120": None,
+                    "輔助人員A": None,
+                    "輔助人員B": None,
+                    "輔助人員C": None,
+                    "輔助人員D": None,
+                    "當日保養": "保養" if has_maintenance else None,
+                    "備註": d.note or None,
+                })
 
-        # 移除全空列、按日期排序
+                # 精準配對：同 site 的 WorkRecord 全部輸出
+                q = wrs_by_site.get(d.site_id)
+                while q and len(q) > 0:
+                    wr = q.popleft()
+                    assistants_raw = wr.assistants or []
+                    assistant_names = resolve_assistants_name(assistants_raw) if assistants_raw else []
+                    assistant_names = (assistant_names + [None, None, None, None])[:4]
+
+                    records.append({
+                        "日期": to_date(wr.record_date),
+                        "廠商": wr.vendor or d.vendor,
+                        "車號": wr.crane.crane_number if wr.crane else (d.crane.crane_number if d.crane else None),
+                        "地點": wr.site.location if wr.site else (d.site.location if d.site else None),
+                        "人員": getattr(wr, "updated_by_nickname", None),
+                        "時數": None,
+                        "吊怪手200": wr.qty_200 if getattr(wr, "qty_200", None) is not None else None,
+                        "吊怪手120": wr.qty_120 if getattr(wr, "qty_120", None) is not None else None,
+                        "輔助人員A": assistant_names[0],
+                        "輔助人員B": assistant_names[1],
+                        "輔助人員C": assistant_names[2],
+                        "輔助人員D": assistant_names[3],
+                        "當日保養": "保養" if has_maintenance else None,
+                        "備註": wr.note or None,
+                    })
+
+            # 2) 群組內剩餘的 WorkRecord（沒對到 site / 沒 site / 沒 DailyTask）照樣輸出
+            #    但「不找 orphan、不印 orphan」
+            fallback_vendor = d_list[0].vendor if d_list else None
+            fallback_site_location = (d_list[0].site.location if (d_list and d_list[0].site) else None)
+            fallback_crane_number = (d_list[0].crane.crane_number if (d_list and d_list[0].crane) else None)
+
+            # 先輸出 wrs_no_site
+            while wrs_no_site:
+                wr = wrs_no_site.popleft()
+                assistants_raw = wr.assistants or []
+                assistant_names = resolve_assistants_name(assistants_raw) if assistants_raw else []
+                assistant_names = (assistant_names + [None, None, None, None])[:4]
+
+                records.append({
+                    "日期": to_date(wr.record_date),
+                    "廠商": wr.vendor or fallback_vendor,
+                    "車號": wr.crane.crane_number if wr.crane else fallback_crane_number,
+                    "地點": wr.site.location if wr.site else fallback_site_location,
+                    "人員": getattr(wr, "updated_by_nickname", None),
+                    "時數": None,
+                    "吊怪手200": wr.qty_200 if getattr(wr, "qty_200", None) is not None else None,
+                    "吊怪手120": wr.qty_120 if getattr(wr, "qty_120", None) is not None else None,
+                    "輔助人員A": assistant_names[0],
+                    "輔助人員B": assistant_names[1],
+                    "輔助人員C": assistant_names[2],
+                    "輔助人員D": assistant_names[3],
+                    "當日保養": "保養" if has_maintenance else None,
+                    "備註": wr.note or None,
+                })
+
+            # 再輸出 wrs_by_site 裡剩下的
+            for site_id, q in list(wrs_by_site.items()):
+                while q:
+                    wr = q.popleft()
+                    assistants_raw = wr.assistants or []
+                    assistant_names = resolve_assistants_name(assistants_raw) if assistants_raw else []
+                    assistant_names = (assistant_names + [None, None, None, None])[:4]
+
+                    records.append({
+                        "日期": to_date(wr.record_date),
+                        "廠商": wr.vendor or fallback_vendor,
+                        "車號": wr.crane.crane_number if wr.crane else fallback_crane_number,
+                        "地點": wr.site.location if wr.site else fallback_site_location,
+                        "人員": getattr(wr, "updated_by_nickname", None),
+                        "時數": None,
+                        "吊怪手200": wr.qty_200 if getattr(wr, "qty_200", None) is not None else None,
+                        "吊怪手120": wr.qty_120 if getattr(wr, "qty_120", None) is not None else None,
+                        "輔助人員A": assistant_names[0],
+                        "輔助人員B": assistant_names[1],
+                        "輔助人員C": assistant_names[2],
+                        "輔助人員D": assistant_names[3],
+                        "當日保養": "保養" if has_maintenance else None,
+                        "備註": wr.note or None,
+                    })
+
+        # 轉 DataFrame 並回傳 Excel
         df = pd.DataFrame.from_records(records)
         if not df.empty:
             df = df.dropna(how="all")
             df = df.sort_values(["日期", "車號"], kind="mergesort")
-        return _send_df_as_excel(
-            df, filename=f"日常登記_{year}.xlsx", sheet_name="日常登記"
-        )
 
+        return _send_df_as_excel(df, filename=f"日常登記_{year}.xlsx", sheet_name="日常登記")
 # ---------- 2) 貨車柴油（雙層表頭） ----------
 @api.route("/api/export/truck-diesel")
 class ExportTruckDiesel(Resource):
