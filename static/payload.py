@@ -153,12 +153,26 @@ add_maintenance_payload = api_ns.model(
 )
 
 add_crane_payload = api_ns.model('新增吊車輸入', {
+        'site_id': fields.String(required=True, description='工地ID', default="123456"),
         'crane_number': fields.String(required=True, description='代號', default="ABC-123"),
         'crane_type': fields.String(required=True, description='圖片', default="輪式"),
         'initial_hours': fields.String(required=True, description='初始小時', default=100),
         'coordinates': fields.String(required=True, description='地點', default='台中港'),
         "photo": fields.List(fields.String, required=False, example="path/to/photo.jpg")
 })
+
+update_crane_payload = api_ns.model('更新吊車輸入', {
+    'site_id': fields.String(required=True, description='工地ID', example="123456"),
+    'crane_number': fields.String(required=False, description='吊車車號/代號', example="ABC-123"),
+    'crane_type': fields.String(required=False, description='吊車類型', example="輪式"),
+    'initial_hours': fields.Integer(required=False, description='初始小時數', example=100),
+    'latitude': fields.Float(required=False, description='緯度', example=24.2123),
+    'longitude': fields.Float(required=False, description='經度', example=120.6345),
+
+
+    "photo": fields.List(fields.String, required=False, description="照片列表(可為 base64 或路徑)", example=["path/to/photo.jpg"]),
+})
+
 
 general_output_payload = api_ns.model(
     "general Output",

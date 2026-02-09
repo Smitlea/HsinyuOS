@@ -130,6 +130,37 @@ class ExportDaily(Resource):
             .all()
         )
 
+        tm_by_date = defaultdict(list)
+        tm_rows = (
+            db.session.query(TaskMaintenance)
+            .options(joinedload(TaskMaintenance.creator))
+            .filter(
+                TaskMaintenance.is_deleted.is_(False),
+                and_(TaskMaintenance.record_date >= start, TaskMaintenance.record_date <= end),
+            )
+            .all()
+        )
+        for tm in tm_rows:
+            tm_by_date[to_date(tm.record_date)].append(tm)
+
+        def fmt_task_maintenance(task_date: dt.date) -> str | None:
+            """
+            把同一天的 TaskMaintenance.description 彙整成一格字串（多筆用換行）
+            顯示格式：暱稱: 描述
+            """
+            lst = tm_by_date.get(task_date, [])
+            if not lst:
+                return None
+
+            lines = []
+            for tm in lst:
+                who = tm.nickname or ""
+                if who:
+                    lines.append(f"{who}: {tm.description}")
+                else:
+                    lines.append(f"{tm.description}")
+            return "\n".join(lines)
+
         # MaintenanceRecord index by (record_date, crane_id)
         maint_by_key = defaultdict(list)
         mr_rows = (
@@ -176,14 +207,13 @@ class ExportDaily(Resource):
 
         records = []
 
-        for (dt, crane_id) in all_keys:
-            d_list = daily_by_dc.get((dt, crane_id), [])
-            w_list = wr_by_dc.get((dt, crane_id), [])
+        for (dt_key, crane_id) in all_keys:
+            d_list = daily_by_dc.get((dt_key, crane_id), [])
+            w_list = wr_by_dc.get((dt_key, crane_id), [])
 
-            # 當日保養（同日同車）
-            has_maintenance = bool(maint_by_key.get((dt, crane_id), []))
+            task_maint_text = fmt_task_maintenance(dt_key)
 
-            # WorkRecord 依 site 分桶（精準配對用）
+
             wrs_by_site = defaultdict(deque)
             wrs_no_site = deque()
 
@@ -193,8 +223,6 @@ class ExportDaily(Resource):
                 else:
                     wrs_no_site.append(wr)
 
-            # 1) 先輸出所有 DailyTask（一般工作列）
-            #    並且把「同日同車同site」的 WorkRecord 先吃掉輸出（精準配對）
             for d in d_list:
                 records.append({
                     "日期": to_date(d.task_date),
@@ -209,7 +237,7 @@ class ExportDaily(Resource):
                     "輔助人員B": None,
                     "輔助人員C": None,
                     "輔助人員D": None,
-                    "當日保養": "保養" if has_maintenance else None,
+                    "當日保養": task_maint_text,
                     "備註": d.note or None,
                 })
 
@@ -234,12 +262,11 @@ class ExportDaily(Resource):
                         "輔助人員B": assistant_names[1],
                         "輔助人員C": assistant_names[2],
                         "輔助人員D": assistant_names[3],
-                        "當日保養": "保養" if has_maintenance else None,
+                        "當日保養": task_maint_text,
                         "備註": wr.note or None,
                     })
 
             # 2) 群組內剩餘的 WorkRecord（沒對到 site / 沒 site / 沒 DailyTask）照樣輸出
-            #    但「不找 orphan、不印 orphan」
             fallback_vendor = d_list[0].vendor if d_list else None
             fallback_site_location = (d_list[0].site.location if (d_list and d_list[0].site) else None)
             fallback_crane_number = (d_list[0].crane.crane_number if (d_list and d_list[0].crane) else None)
@@ -264,7 +291,7 @@ class ExportDaily(Resource):
                     "輔助人員B": assistant_names[1],
                     "輔助人員C": assistant_names[2],
                     "輔助人員D": assistant_names[3],
-                    "當日保養": "保養" if has_maintenance else None,
+                    "當日保養": task_maint_text,
                     "備註": wr.note or None,
                 })
 
@@ -289,7 +316,7 @@ class ExportDaily(Resource):
                         "輔助人員B": assistant_names[1],
                         "輔助人員C": assistant_names[2],
                         "輔助人員D": assistant_names[3],
-                        "當日保養": "保養" if has_maintenance else None,
+                        "當日保養": task_maint_text,
                         "備註": wr.note or None,
                     })
 

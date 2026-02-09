@@ -69,7 +69,6 @@ def photo_path_to_base64(photo_field: str | list[str]) -> list[str]:
 def save_photos(name:str, photo_list: list[str], PHOTO_DIR) -> list[str]:
     """儲存多張 Base64 圖片，回傳每張路徑"""
     os.makedirs(PHOTO_DIR, exist_ok=True)
-    logger.debug(f"Saving {photo_list} photos for {name}")
     photos_path = []
     for idx, b64 in enumerate(photo_list):
         try:

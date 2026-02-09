@@ -14,7 +14,7 @@ _sum_usage_hours, _pending_parts_in_current_cycle
 )
 from static.payload import (
     api_ns, api, api_crane, api_test, api_notice,
-    add_crane_payload, general_output_payload,
+    add_crane_payload, general_output_payload, update_crane_payload,
     add_usage_payload, add_notice_payload, add_maintenance_payload,
     notice_color_model
 )
@@ -277,7 +277,7 @@ class Crane_detail(Resource):
         
     @jwt_required()
     @handle_request_exception
-    @api.expect(add_crane_payload)
+    @api.expect(update_crane_payload)
     @api.marshal_with(general_output_payload)
     def put(self, crane_id):
         try:
@@ -288,7 +288,7 @@ class Crane_detail(Resource):
             
             data = api.payload
             new_crane_number = data.get('crane_number')
-            new_site_id = data.get("site_id")
+            site_id = data.get("site_id")
 
              # ---------- 1. 驗證使用者 ----------
             # user = User.query.get(get_jwt_identity())
@@ -308,8 +308,8 @@ class Crane_detail(Resource):
 
 
             # ---------- 3. 更新工地資訊與位置 ----------
-            if new_site_id:
-                site = ConstructionSite.query.get(new_site_id)
+            if site_id:
+                site = ConstructionSite.query.get(site_id)
                 if not site:
                     return {"status": 1, "result": "找不到工地"}, 404
                 crane.site = site
