@@ -6,9 +6,11 @@ from flask import request   # 不要用 jsonify，讓 RESTX 幫你序列化
 from flask_restx import Resource
 from flask_jwt_extended import jwt_required, get_jwt_identity
 
+import datetime
 from static.models import (
-    db, Crane, MaintenanceRecord, User, _sum_usage_hours,
-    _cycle_info, _due_parts_for_cycle
+    db, Crane, MaintenanceRecord, User, CraneMaintenanceState, CraneWireRope,
+    _sum_usage_hours, _cycle_info, _due_parts_for_cycle,
+    _maintenance_alert, CYCLE_HOURS, CYCLES_PER_ROUND, ROUND_HOURS
 )
 from static.payload import api_ns
 from static.util import handle_request_exception
@@ -50,6 +52,9 @@ CONSUMABLE_LABEL_TO_CODE = {v: k for k, v in CONSUMABLE_LABELS.items()}
 
 ALLOWED_PARTS = set(PART_LABELS.keys())
 ALLOWED_CONSUMABLES = set(CONSUMABLE_LABELS.keys())
+
+# 補捲/起伏/旋回 在前端顯示時合併為「其他」
+GROUPED_AS_OTHER = {"aux_hoist_gear_oil", "luffing_gear_oil", "slewing_gear_oil"}
 
 def _consumables_hints_for_parts(parts: list[str]) -> list[str]:
     hints: list[str] = []
@@ -98,10 +103,19 @@ def _normalize_consumable_codes(items: list[str]) -> tuple[list[str], list[str]]
             codes.append(code)
     return codes, unknown
 
-def _code_label_list(codes: list[str], kind: str = "part") -> list[dict]:
-    """把代碼列表轉成 [{code,label}]"""
+def _code_label_list(codes: list[str], kind: str = "part") -> list[str]:
+    """把代碼列表轉成中文顯示標籤，part 類型會將補捲/起伏/旋回合併為「其他」"""
     if kind == "part":
-        return [PART_LABELS.get(c, c)for c in codes]
+        labels: list[str] = []
+        other_added = False
+        for c in codes:
+            if c in GROUPED_AS_OTHER:
+                if not other_added:
+                    labels.append("其他")
+                    other_added = True
+            else:
+                labels.append(PART_LABELS.get(c, c))
+        return labels
     else:
         return [CONSUMABLE_LABELS.get(c, c) for c in codes]
 
@@ -111,63 +125,64 @@ def _code_label_list(codes: list[str], kind: str = "part") -> list[dict]:
 # - 若本期曾更換 circulation_oil → 顯示「煞車」「排水」「進油」「回油」「循環油」
 # - 其他齒輪油/皮帶 → 直接用 PART_LABELS
 def _frontend_parts_labels(already_parts: set[str], already_cons: set[str]) -> list[str]:
-        """
-        把同週期內「已完成」的 部件＋耗材 轉為中文顯示清單。
-        - 有主件（engine_oil / circulation_oil）時：濾芯先列，再列主件。
-        - 也會把「獨立記錄的耗材」補上（即使沒有主件也會顯示）。
-        """
-        labels: list[str] = []
+    """
+    把同週期內「已完成」的 部件＋耗材 轉為中文顯示清單。
+    - 主捲、獅頭個別顯示；補捲/起伏/旋回合併為「其他」。
+    - 有主件（engine_oil / circulation_oil）時：濾芯先列，再列主件。
+    - 也會把「獨立記錄的耗材」補上（即使沒有主件也會顯示）。
+    """
+    labels: list[str] = []
 
-        # 先處理一般部件（齒輪油、皮帶）
-        for code in [
-            "main_hoist_gear_oil",  # 主捲
-            "lion_head_gear_oil",   # 獅頭
-            "aux_hoist_gear_oil",   # 補捲
-            "luffing_gear_oil",     # 起伏
-            "slewing_gear_oil",     # 旋回
-            "belts"                 # 皮帶齒盤
-        ]:
-            if code in already_parts:
-                labels.append(PART_LABELS.get(code, code))
+    # 主捲、獅頭個別顯示
+    for code in ["main_hoist_gear_oil", "lion_head_gear_oil"]:
+        if code in already_parts:
+            labels.append(PART_LABELS.get(code, code))
 
-        # engine_oil：濾芯先列，再列主項
-        if "engine_oil" in already_parts:
-            labels.extend([
-                CONSUMABLE_LABELS["engine_oil_filter"],  # 機油芯
-                CONSUMABLE_LABELS["fuel_oil_filter"],    # 柴油芯
-                PART_LABELS["engine_oil"],               # 機油
-            ])
+    # 補捲/起伏/旋回 → 合併為「其他」
+    if any(c in already_parts for c in GROUPED_AS_OTHER):
+        labels.append("其他")
 
-        # circulation_oil：四個濾芯先列，再列主項
-        if "circulation_oil" in already_parts:
-            labels.extend([
-                CONSUMABLE_LABELS["braker_drain_filter"],      # 煞車
-                CONSUMABLE_LABELS["circulation_drain_filter"], # 排水
-                CONSUMABLE_LABELS["circulation_inlet_filter"], # 進油
-                CONSUMABLE_LABELS["circulation_return_filter"],# 回油
-                PART_LABELS["circulation_oil"],                # 循環油
-            ])
+    # 皮帶齒盤
+    if "belts" in already_parts:
+        labels.append(PART_LABELS["belts"])
 
-        # 把「獨立記錄的耗材」也補上（即使沒有主件）
-        # 用固定順序，避免顯示順序不穩定
-        for c in [
-            "engine_oil_filter",
-            "fuel_oil_filter",
-            "braker_drain_filter",
-            "circulation_drain_filter",
-            "circulation_inlet_filter",
-            "circulation_return_filter",
-        ]:
-            if c in already_cons:
-                labels.append(CONSUMABLE_LABELS.get(c, c))
+    # engine_oil：濾芯先列，再列主項
+    if "engine_oil" in already_parts:
+        labels.extend([
+            CONSUMABLE_LABELS["engine_oil_filter"],  # 機油芯
+            CONSUMABLE_LABELS["fuel_oil_filter"],    # 柴油芯
+            PART_LABELS["engine_oil"],               # 機油
+        ])
 
-        # 去重保序
-        seen, ordered = set(), []
-        for s in labels:
-            if s not in seen:
-                seen.add(s)
-                ordered.append(s)
-        return ordered
+    # circulation_oil：四個濾芯先列，再列主項
+    if "circulation_oil" in already_parts:
+        labels.extend([
+            CONSUMABLE_LABELS["braker_drain_filter"],      # 煞車
+            CONSUMABLE_LABELS["circulation_drain_filter"], # 排水
+            CONSUMABLE_LABELS["circulation_inlet_filter"], # 進油
+            CONSUMABLE_LABELS["circulation_return_filter"],# 回油
+            PART_LABELS["circulation_oil"],                # 循環油
+        ])
+
+    # 把「獨立記錄的耗材」也補上（即使沒有主件）
+    for c in [
+        "engine_oil_filter",
+        "fuel_oil_filter",
+        "braker_drain_filter",
+        "circulation_drain_filter",
+        "circulation_inlet_filter",
+        "circulation_return_filter",
+    ]:
+        if c in already_cons:
+            labels.append(CONSUMABLE_LABELS.get(c, c))
+
+    # 去重保序
+    seen, ordered = set(), []
+    for s in labels:
+        if s not in seen:
+            seen.add(s)
+            ordered.append(s)
+    return ordered
 # =================================================================
 #  GET：單一吊車維護總覽（適合你的單車 UI）
 #    /api/cranes/<crane_id>/maintenance  [GET]
@@ -564,7 +579,8 @@ class CraneMaintenanceDue(Resource):
         if total_hours is None:
             return {"error": f"找不到吊車 id={crane_id}"}, 404
 
-        info = _cycle_info(total_hours)
+        crane = Crane.query.get(crane_id)
+        info = _cycle_info(total_hours, crane_id)          # 使用 DB 狀態
         due_codes: list[str] = _due_parts_for_cycle(info["cycle_index"])       # 本期應更換「部件」代碼
         due_set = set(due_codes)
 
@@ -607,12 +623,268 @@ class CraneMaintenanceDue(Resource):
             _code_label_list(sorted(already_cons_codes),  "consumable")
         )
 
+        # 鋼索狀態
+        wire_rope = CraneWireRope.query.filter_by(crane_id=crane_id).first()
+
         return {
             "crane_id": crane_id,
             "total_hours": total_hours,
             "cycle": info["cycle_index"],   # 1..12
+            "cycle_start": info["cycle_start"],
+            "cycle_end":   info["cycle_end"],
+            "needs_maintenance_alert": _maintenance_alert(crane, total_hours, info),
             "due_parts": _code_label_list(due_codes, "part"),
             "consumables_hint": _code_label_list(hint_codes, "consumable"),
-            "already_replaced": already_labels,                            # 例如：["機油","機油芯","柴油芯"]
-            "pending_parts": _code_label_list(pending_part_codes, "part"), # 僅保留仍未更換的 due「部件」
+            "already_replaced": already_labels,
+            "pending_parts": _code_label_list(pending_part_codes, "part"),
+            "wire_rope": {
+                "needs_replacement": wire_rope.needs_replacement if wire_rope else False,
+                "replacement_count": wire_rope.replacement_count if wire_rope else 0,
+            },
+        }, 200
+
+
+# =================================================================
+#  後台管理：保養週期狀態
+#  GET  /api/cranes/<id>/maintenance/state   → 查看當前週期狀態
+#  PUT  /api/cranes/<id>/maintenance/state   → 調整到指定週期（需 permission>=2）
+#  POST /api/cranes/<id>/maintenance/state/reset → 重置至第 1 週期（需 permission>=2）
+# =================================================================
+@api_ns.route("/api/cranes/<int:crane_id>/maintenance/state", methods=["GET", "PUT"])
+class CraneMaintenanceStateResource(Resource):
+
+    @jwt_required()
+    @handle_request_exception
+    def get(self, crane_id: int):
+        """查看吊車保養週期狀態（後台）"""
+        total_hours = _sum_usage_hours(crane_id)
+        if total_hours is None:
+            return {"error": f"找不到吊車 id={crane_id}"}, 404
+
+        crane = Crane.query.get(crane_id)
+        info  = _cycle_info(total_hours, crane_id)
+        state = CraneMaintenanceState.query.filter_by(crane_id=crane_id).first()
+
+        return {
+            "status": "0",
+            "result": {
+                "crane_id":               crane_id,
+                "total_hours":            total_hours,
+                "current_cycle":          info["cycle_index"],
+                "cycle_start":            info["cycle_start"],
+                "cycle_end":              info["cycle_end"],
+                "round_base_hours":       info["round_base"],
+                "initial_cycle":          state.initial_cycle  if state else 1,
+                "reset_count":            state.reset_count    if state else 0,
+                "last_reset_at":          state.last_reset_at.isoformat() if state and state.last_reset_at else None,
+                "needs_maintenance_alert": _maintenance_alert(crane, total_hours, info),
+            }
+        }, 200
+
+    @jwt_required()
+    @handle_request_exception
+    def put(self, crane_id: int):
+        """調整吊車保養至指定週期（需 permission >= 2）
+        Body: { "target_cycle": 3 }
+        """
+        user = User.query.get(get_jwt_identity())
+        if not user or user.permission < 2:
+            return {"error": "需要管理者權限 (permission >= 2)"}, 403
+
+        data = api_ns.payload or request.get_json(silent=True) or {}
+        target_cycle = data.get("target_cycle")
+        if target_cycle is None:
+            return {"error": "必填欄位：target_cycle (1~12)"}, 400
+        try:
+            target_cycle = int(target_cycle)
+        except (ValueError, TypeError):
+            return {"error": "target_cycle 需為整數"}, 400
+        if not (1 <= target_cycle <= CYCLES_PER_ROUND):
+            return {"error": f"target_cycle 需介於 1~{CYCLES_PER_ROUND}"}, 400
+
+        total_hours = _sum_usage_hours(crane_id)
+        if total_hours is None:
+            return {"error": f"找不到吊車 id={crane_id}"}, 404
+
+        # 計算使當前週期 == target_cycle 所需的 round_base_hours
+        # cycle_index = ((total - base) // 500) + 1  →  base = total - (target-1)*500
+        new_base = int(total_hours) - (target_cycle - 1) * CYCLE_HOURS
+        if new_base < 0:
+            return {
+                "error": f"目前總時數 {total_hours}hr 不足以設定至第 {target_cycle} 週期"
+            }, 400
+
+        state = CraneMaintenanceState.query.filter_by(crane_id=crane_id).first()
+        if state is None:
+            state = CraneMaintenanceState(crane_id=crane_id)
+            db.session.add(state)
+
+        state.round_base_hours = float(new_base)
+        state.initial_cycle    = target_cycle
+        state.reset_count     += 1
+        state.last_reset_at    = datetime.datetime.now(tz)
+        state.last_reset_by    = user.id
+        db.session.commit()
+
+        info = _cycle_info(total_hours, crane_id)
+        return {
+            "status": "0",
+            "result": {
+                "crane_id":        crane_id,
+                "current_cycle":   info["cycle_index"],
+                "round_base_hours": state.round_base_hours,
+                "initial_cycle":   state.initial_cycle,
+                "reset_count":     state.reset_count,
+            }
+        }, 200
+
+
+@api_ns.route("/api/cranes/<int:crane_id>/maintenance/state/reset", methods=["POST"])
+class CraneMaintenanceStateReset(Resource):
+
+    @jwt_required()
+    @handle_request_exception
+    def post(self, crane_id: int):
+        """重置保養週期至第 1 週期（需 permission >= 2）"""
+        user = User.query.get(get_jwt_identity())
+        if not user or user.permission < 2:
+            return {"error": "需要管理者權限 (permission >= 2)"}, 403
+
+        total_hours = _sum_usage_hours(crane_id)
+        if total_hours is None:
+            return {"error": f"找不到吊車 id={crane_id}"}, 404
+
+        state = CraneMaintenanceState.query.filter_by(crane_id=crane_id).first()
+        if state is None:
+            state = CraneMaintenanceState(crane_id=crane_id)
+            db.session.add(state)
+
+        state.round_base_hours = float(int(total_hours))
+        state.initial_cycle    = 1
+        state.reset_count     += 1
+        state.last_reset_at    = datetime.datetime.now(tz)
+        state.last_reset_by    = user.id
+        db.session.commit()
+
+        return {
+            "status": "0",
+            "result": {
+                "crane_id":        crane_id,
+                "current_cycle":   1,
+                "round_base_hours": state.round_base_hours,
+                "reset_count":     state.reset_count,
+                "message":         "保養週期已重置至第 1 週期",
+            }
+        }, 200
+
+
+# =================================================================
+#  鋼索保養管理
+#  GET  /api/cranes/<id>/wire-rope          → 查看鋼索狀態
+#  PUT  /api/cranes/<id>/wire-rope          → 後台手動設定狀態（需 permission>=2）
+#  POST /api/cranes/<id>/wire-rope/reset    → 老闆更換鋼索後手動重置
+# =================================================================
+@api_ns.route("/api/cranes/<int:crane_id>/wire-rope", methods=["GET", "PUT"])
+class CraneWireRopeResource(Resource):
+
+    @jwt_required()
+    @handle_request_exception
+    def get(self, crane_id: int):
+        """查看吊車鋼索狀態"""
+        crane = Crane.query.get(crane_id)
+        if not crane:
+            return {"error": f"找不到吊車 id={crane_id}"}, 404
+
+        wr = CraneWireRope.query.filter_by(crane_id=crane_id).first()
+        if wr is None:
+            wr = CraneWireRope(crane_id=crane_id)
+            db.session.add(wr)
+            db.session.commit()
+
+        return {
+            "status": "0",
+            "result": {
+                "crane_id":           crane_id,
+                "needs_replacement":  wr.needs_replacement,
+                "replacement_count":  wr.replacement_count,
+                "last_replaced_at":   wr.last_replaced_at.isoformat() if wr.last_replaced_at else None,
+                "last_replaced_hours": wr.last_replaced_hours,
+            }
+        }, 200
+
+    @jwt_required()
+    @handle_request_exception
+    def put(self, crane_id: int):
+        """後台手動設定鋼索狀態（需 permission >= 2）
+        Body: { "needs_replacement": true/false }
+        """
+        user = User.query.get(get_jwt_identity())
+        if not user or user.permission < 2:
+            return {"error": "需要管理者權限 (permission >= 2)"}, 403
+
+        crane = Crane.query.get(crane_id)
+        if not crane:
+            return {"error": f"找不到吊車 id={crane_id}"}, 404
+
+        data = api_ns.payload or request.get_json(silent=True) or {}
+        needs_replacement = data.get("needs_replacement")
+        if needs_replacement is None:
+            return {"error": "必填欄位：needs_replacement (true/false)"}, 400
+
+        wr = CraneWireRope.query.filter_by(crane_id=crane_id).first()
+        if wr is None:
+            wr = CraneWireRope(crane_id=crane_id)
+            db.session.add(wr)
+
+        wr.needs_replacement = bool(needs_replacement)
+        db.session.commit()
+
+        return {
+            "status": "0",
+            "result": {
+                "crane_id":          crane_id,
+                "needs_replacement": wr.needs_replacement,
+                "replacement_count": wr.replacement_count,
+            }
+        }, 200
+
+
+@api_ns.route("/api/cranes/<int:crane_id>/wire-rope/reset", methods=["POST"])
+class CraneWireRopeReset(Resource):
+
+    @jwt_required()
+    @handle_request_exception
+    def post(self, crane_id: int):
+        """老闆更換鋼索後手動重置（任意已登入使用者皆可操作）
+        重置後：needs_replacement=False，replacement_count+1，記錄當時時數
+        """
+        user = User.query.get(get_jwt_identity())
+        if not user:
+            return {"error": "使用者不存在"}, 403
+
+        total_hours = _sum_usage_hours(crane_id)
+        if total_hours is None:
+            return {"error": f"找不到吊車 id={crane_id}"}, 404
+
+        wr = CraneWireRope.query.filter_by(crane_id=crane_id).first()
+        if wr is None:
+            wr = CraneWireRope(crane_id=crane_id)
+            db.session.add(wr)
+
+        wr.needs_replacement   = False
+        wr.replacement_count  += 1
+        wr.last_replaced_at    = datetime.datetime.now(tz)
+        wr.last_replaced_hours = float(total_hours)
+        wr.last_replaced_by    = user.id
+        db.session.commit()
+
+        return {
+            "status": "0",
+            "result": {
+                "crane_id":            crane_id,
+                "needs_replacement":   False,
+                "replacement_count":   wr.replacement_count,
+                "last_replaced_hours": wr.last_replaced_hours,
+                "message":             "鋼索已標記為更換完成",
+            }
         }, 200

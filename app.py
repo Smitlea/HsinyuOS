@@ -31,7 +31,7 @@ from function.fuel import *
 from function.hr import *
 from function.maintain import *
 from function.export_excel import *
-from static.models import db, User, UserProfile
+from static.models import db, User, UserProfile, Crane, CraneMaintenanceState, CraneWireRope
 from static.logger import logging
 from static.util import handle_request_exception
 
@@ -116,12 +116,35 @@ def _init_annocement_color():
             logger.info(f"Insert default AnnocementColor: {status} → {color}")
     db.session.commit()
 
+def _init_crane_states():
+    """為已存在且尚未有 CraneMaintenanceState / CraneWireRope 的吊車建立初始紀錄"""
+    from static.models import _sum_usage_hours, ROUND_HOURS, CYCLE_HOURS
+    cranes = Crane.query.all()
+    changed = False
+    for crane in cranes:
+        if not CraneMaintenanceState.query.filter_by(crane_id=crane.id).first():
+            total = float(crane.initial_hours or 0)
+            offset   = int(total) % ROUND_HOURS
+            base     = int(total) - offset
+            db.session.add(CraneMaintenanceState(
+                crane_id=crane.id,
+                round_base_hours=float(base),
+                initial_cycle=1,
+            ))
+            changed = True
+        if not CraneWireRope.query.filter_by(crane_id=crane.id).first():
+            db.session.add(CraneWireRope(crane_id=crane.id))
+            changed = True
+    if changed:
+        db.session.commit()
+
 db.init_app(app)
 with app.app_context():
     db.create_all()
-    _init_notice_color() 
+    _init_notice_color()
     _init_users()
     _init_annocement_color()
+    _init_crane_states()
     logger.info('DB 成功啟動')
 
 

@@ -555,6 +555,19 @@ def _sum_usage_hours(crane_id: int) -> float | None:
     db.session.commit()
     return total
 
+def _maintenance_alert(crane: "Crane", total_hours: float, info: dict) -> bool:
+    """
+    判斷是否顯示保養警示（紅色 icon）。
+    - 履帶式 (crane_type=True，55噸)：在當前 500hr 週期中，偏移 >= 450 → 警示
+    - 輪式   (crane_type=False，35噸)：在當前 1000hr 跨度中，偏移 >= 950 → 警示
+    """
+    if crane.crane_type:  # 履帶
+        return (total_hours - info["cycle_start"]) >= 450
+    else:  # 輪式：1000hr 跨度 = 2 個 500hr 週期
+        offset_in_round = total_hours - info["round_base"]
+        return (offset_in_round % 1000) >= 950
+
+
 def _pending_parts_in_current_cycle(crane_id: int, total_hours: int | None = None):
     """
     回傳 (info, due_parts, pending_parts)
@@ -572,7 +585,7 @@ def _pending_parts_in_current_cycle(crane_id: int, total_hours: int | None = Non
         if total_hours is None:
             return None, [], []
 
-    info = _cycle_info(int(total_hours))
+    info = _cycle_info(int(total_hours), crane_id)   # 使用 DB 狀態
     due_parts = _due_parts_for_cycle(info["cycle_index"])
 
     # 此吊車該週期內已經更換過的零件
@@ -592,7 +605,7 @@ def _pending_parts_in_current_cycle(crane_id: int, total_hours: int | None = Non
     pending = [p for p in due_parts if p not in already]
     return info, sorted(due_parts), sorted(pending)
 
-# ────────── 常數（與你原本一致） ──────────
+# ────────── 常數 ──────────
 CYCLE_HOURS = 500
 CYCLES_PER_ROUND = 12
 ROUND_HOURS = CYCLE_HOURS * CYCLES_PER_ROUND  # 6000
@@ -604,24 +617,106 @@ CONSUMABLES_HINTS = {
 }
 
 
-def _cycle_info(total_hours: int) -> dict:
+# ────────── 新增：保養週期狀態（資料庫可調整） ──────────
+class CraneMaintenanceState(BaseTable):
+    """
+    每台吊車的保養週期狀態（後台可調整起算點）
+    - round_base_hours : 當前 6000hr 輪次的起始總時數，改變此值即可調整週期
+    - initial_cycle    : 本輪由哪個週期起始（紀錄用）
+    - reset_count      : 後台調整/重置次數
+    """
+    __tablename__ = "crane_maintenance_states"
+
+    crane_id         = db.Column(db.Integer, db.ForeignKey("cranes.id"), nullable=False, unique=True)
+    round_base_hours = db.Column(db.Float, nullable=False, default=0.0,
+                                  comment="當前輪次起始總時數")
+    initial_cycle    = db.Column(db.Integer, nullable=False, default=1,
+                                  comment="本輪起始週期 (1-12)")
+    reset_count      = db.Column(db.Integer, nullable=False, default=0,
+                                  comment="後台重置/調整次數")
+    last_reset_at    = db.Column(db.DateTime(timezone=True), nullable=True)
+    last_reset_by    = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+
+    crane    = db.relationship("Crane", backref=db.backref("maintenance_state", uselist=False,
+                                                             cascade="all, delete-orphan"))
+    resetter = db.relationship("User", foreign_keys=[last_reset_by])
+
+
+# ────────── 新增：鋼索保養追蹤 ──────────
+class CraneWireRope(BaseTable):
+    """
+    每台吊車的鋼索保養狀態（手動重置）
+    - needs_replacement  : True = 需要更換
+    - replacement_count  : 已更換次數
+    - last_replaced_*    : 上次更換的時間、時數、操作者
+    """
+    __tablename__ = "crane_wire_ropes"
+
+    crane_id             = db.Column(db.Integer, db.ForeignKey("cranes.id"), nullable=False, unique=True)
+    needs_replacement    = db.Column(db.Boolean, nullable=False, default=False,
+                                      comment="True = 需要更換鋼索")
+    replacement_count    = db.Column(db.Integer, nullable=False, default=0,
+                                      comment="已更換次數")
+    last_replaced_at     = db.Column(db.DateTime(timezone=True), nullable=True)
+    last_replaced_hours  = db.Column(db.Float, nullable=True,
+                                      comment="上次更換時的吊車總時數")
+    last_replaced_by     = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+
+    crane    = db.relationship("Crane", backref=db.backref("wire_rope", uselist=False,
+                                                             cascade="all, delete-orphan"))
+    replacer = db.relationship("User", foreign_keys=[last_replaced_by])
+
+
+def _cycle_info(total_hours: int | float, crane_id: int | None = None) -> dict:
     """
     傳回目前所在週期資訊：
     - cycle_index: 1~12
-    - round_base: 本輪起始基準小時（例如 12000、18000…）
+    - round_base: 本輪起始基準小時
     - cycle_start, cycle_end: 本週期的小時範圍 [start, end)
+
+    若 crane_id 有值，從 CraneMaintenanceState 讀取 round_base_hours（支援後台調整）。
+    超過 ROUND_HOURS 時自動推進並寫回 DB。
+    不傳 crane_id 則使用純算術（適合歷史紀錄查詢）。
     """
-    # 本輪偏移
-    offset = total_hours % ROUND_HOURS  # 0~5000
-    cycle_index = (offset // CYCLE_HOURS) + 1  # 1..12
-    round_base = total_hours - offset          # 0, 5000, 10000, ...
+    total_hours = int(total_hours)
+    round_base: int | None = None
+
+    if crane_id is not None:
+        state = CraneMaintenanceState.query.filter_by(crane_id=crane_id).first()
+        if state is None:
+            # 第一次存取：以純算術計算初始值
+            init_offset = total_hours % ROUND_HOURS
+            init_base   = total_hours - init_offset
+            state = CraneMaintenanceState(
+                crane_id=crane_id,
+                round_base_hours=float(init_base),
+                initial_cycle=1,
+            )
+            db.session.add(state)
+            db.session.commit()
+
+        round_base = int(state.round_base_hours)
+        # 自動推進：若已超過本輪 6000hr
+        while total_hours - round_base >= ROUND_HOURS:
+            round_base += ROUND_HOURS
+        if round_base != int(state.round_base_hours):
+            state.round_base_hours = float(round_base)
+            db.session.commit()
+
+    if round_base is None:
+        # 純算術（歷史紀錄）
+        offset     = total_hours % ROUND_HOURS
+        round_base = total_hours - offset
+
+    offset      = max(0, total_hours - round_base)
+    cycle_index = min(int(offset // CYCLE_HOURS) + 1, CYCLES_PER_ROUND)
     cycle_start = round_base + (cycle_index - 1) * CYCLE_HOURS
-    cycle_end = cycle_start + CYCLE_HOURS
+    cycle_end   = cycle_start + CYCLE_HOURS
     return {
         "cycle_index": int(cycle_index),
-        "round_base": int(round_base),
+        "round_base":  int(round_base),
         "cycle_start": int(cycle_start),
-        "cycle_end": int(cycle_end),
+        "cycle_end":   int(cycle_end),
     }
 
 def _due_parts_for_cycle(cycle_index: int) -> list[str]:

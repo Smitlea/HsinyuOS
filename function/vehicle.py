@@ -10,7 +10,7 @@ from sqlalchemy.orm import joinedload, selectinload
 
 from static.models import( db, Crane, User, DailyTask,
 CraneUsage, CraneNotice, CraneMaintenance, ConstructionSite, NoticeColor,
-_sum_usage_hours, _pending_parts_in_current_cycle
+_sum_usage_hours, _pending_parts_in_current_cycle, _maintenance_alert
 )
 from static.payload import (
     api_ns, api, api_crane, api_test, api_notice,
@@ -45,12 +45,11 @@ class Stats(Resource):
 
         for crane in crane_list:
             total_usage = _sum_usage_hours(crane.id) or float(crane.initial_hours or 0)
-            threshold   = 450 if bool(crane.crane_type) else 950
-            _, _, pending = _pending_parts_in_current_cycle(crane.id, int(total_usage))
-            alert = (total_usage >= threshold) and bool(pending)
+            info, _, pending = _pending_parts_in_current_cycle(crane.id, int(total_usage))
+            alert = bool(info) and _maintenance_alert(crane, total_usage, info) and bool(pending)
 
             total_usage_hours += float(total_usage)
-            if alert or (total_usage >= threshold):
+            if alert:
                 pending_maintenance += 1
 
         active_sites = (
@@ -143,13 +142,10 @@ class Create_crane(Resource):
 
             result = []
             for crane in crane_list:
-                # 逐台計算使用時數與門檻
+                # 逐台計算使用時數與警示
                 total_usage = _sum_usage_hours(crane.id) or float(crane.initial_hours)
-                
-                threshold   = 450 if bool(crane.crane_type) else 950
-                _, _, pending = _pending_parts_in_current_cycle(crane.id, int(total_usage))
-
-                alert = (total_usage >= threshold) and bool(pending)
+                info, _, pending = _pending_parts_in_current_cycle(crane.id, int(total_usage))
+                alert = bool(info) and _maintenance_alert(crane, total_usage, info) and bool(pending)
 
                 result.append({
                     "id": crane.id,
@@ -165,7 +161,6 @@ class Create_crane(Resource):
                     "latitude": crane.latitude,
                     "longitude": crane.longitude,
                     "total_usage_hours": total_usage,
-                    "threshold": threshold,
                     "alert": alert,
                 })
 
@@ -247,9 +242,8 @@ class Crane_detail(Resource):
                 return {"status": "1", "result": "找不到指定的吊車"}, 404
             
             total_usage = _sum_usage_hours(crane.id) or float(crane.initial_hours)
-            threshold   = 450 if bool(crane.crane_type) else 950
-            _, _, pending = _pending_parts_in_current_cycle(crane.id, int(total_usage))
-            alert = (total_usage >= threshold) and bool(pending)
+            info, _, pending = _pending_parts_in_current_cycle(crane.id, int(total_usage))
+            alert = bool(info) and _maintenance_alert(crane, total_usage, info) and bool(pending)
 
             base64_photos = photo_path_to_base64(crane.site.photo)
 
@@ -368,7 +362,8 @@ class Create_usage(Resource):
             } for t in tasks]
 
             total_usage = _sum_usage_hours(crane_id) or float(crane.initial_hours)
-            threshold   = 450 if bool(crane.crane_type) else 950
+            info, _, pending = _pending_parts_in_current_cycle(crane_id, int(total_usage))
+            alert = bool(info) and _maintenance_alert(crane, total_usage, info) and bool(pending)
 
             return {"status": "0", "result": {
                 "crane_id": crane_id,
@@ -376,8 +371,7 @@ class Create_usage(Resource):
                 "summary": {
                     "initial_hours": float(crane.initial_hours),
                     "total_usage_hours": total_usage,
-                    "threshold": threshold,
-                    "alert": total_usage >= threshold
+                    "alert": alert,
                 }
             }}, 200
 
