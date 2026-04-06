@@ -245,20 +245,23 @@ class Crane_detail(Resource):
             info, _, pending = _pending_parts_in_current_cycle(crane.id, int(total_usage))
             alert = bool(info) and _maintenance_alert(crane, total_usage, info) and bool(pending)
 
-            base64_photos = photo_path_to_base64(crane.site.photo)
+            site_data = None
+            if crane.site:
+                base64_photos = photo_path_to_base64(crane.site.photo)
+                site_data = {
+                    "id": crane.site.id,
+                    "vendor": crane.site.vendor,
+                    "location": crane.site.location,
+                    "latitude": crane.site.latitude,
+                    "longitude": crane.site.longitude,
+                    "photo": base64_photos,
+                }
 
             data = {
                 "id": crane.id,
                 "crane_number": crane.crane_number,
                 "crane_type": crane.crane_type,
-                "site": {
-                        "id": crane.site.id,
-                        "vendor": crane.site.vendor,
-                        "location": crane.site.location,
-                        "latitude": crane.site.latitude,
-                        "longitude": crane.site.longitude,
-                        "photo": base64_photos
-                        }if crane.site else None,
+                "site": site_data,
                 "total_usage_hours": total_usage,
                 "alert": alert
             }

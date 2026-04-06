@@ -23,23 +23,11 @@ def handle_request_exception(func):
         except BadRequest as bad_request:
             error_message = str(bad_request)
             logger.error("Bad Request: %s", error_message)
-            return abort(
-                HTTPStatus.BAD_REQUEST,
-                message="Bad Request",
-                error=error_message,
-                status=1,
-                result=None,
-            )
+            return {"status": 1, "result": "Bad Request", "error": error_message}, 400
         except Exception as e:
             error_message = f"{e.__class__.__name__}: {e}"
             logger.error("An error occurred: %s", error_message)
-            return abort(
-                HTTPStatus.INTERNAL_SERVER_ERROR,
-                message="Internal Server Error",
-                error=error_message,
-                status=1,
-                result=None,
-            )
+            return {"status": 1, "result": "Internal Server Error", "error": error_message}, 500
 
     return wrapper
 

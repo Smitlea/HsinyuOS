@@ -546,11 +546,12 @@ def _sum_usage_hours(crane_id: int) -> float | None:
     base  = float(crane.initial_hours or 0.0)
     total = base + float(total_work)
 
-    if crane.usages is None:
-        crane.usages = CraneUsage(crane_id=crane_id, total_hours=total)
+    usage = CraneUsage.query.filter_by(crane_id=crane_id).with_for_update().first()
+    if usage is None:
+        db.session.add(CraneUsage(crane_id=crane_id, total_hours=total))
     else:
-        crane.usages.total_hours = total
-        crane.usages.last_recalc_at = datetime.datetime.now(tz)
+        usage.total_hours = total
+        usage.last_recalc_at = datetime.datetime.now(tz)
 
     db.session.commit()
     return total

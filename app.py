@@ -49,7 +49,6 @@ app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("SQL_SERVER")
 app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY')
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(minutes=120)
 app.config["JWT_REFRESH_TOKEN_EXPIRES"] = timedelta(days=1) 
-app.config["PROPAGATE_EXCEPTIONS"] = True
 app.config['API_KEY']= os.environ.get('API_SECRET_KEY')
 app.config['CACHE_TYPE'] = 'RedisCache'
 app.config['CACHE_REDIS_URL'] = os.getenv('REDIS_URL')
