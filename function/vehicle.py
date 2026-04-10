@@ -10,6 +10,7 @@ from sqlalchemy.orm import joinedload, selectinload
 
 from static.models import( db, Crane, User, DailyTask,
 CraneUsage, CraneNotice, CraneMaintenance, ConstructionSite, NoticeColor,
+CraneWireRope,
 _sum_usage_hours, _sync_usage_hours_cache, _wire_rope_alert
 )
 from static.payload import (
@@ -145,6 +146,11 @@ class Create_crane(Resource):
                 total_usage = _sum_usage_hours(crane.id) or float(crane.initial_hours)
                 alert = _wire_rope_alert(crane, total_usage)
 
+                # 計算自上次換索以來的累積時數，作為 total_usage_hours 回傳給 App 顯示天數
+                wr = CraneWireRope.query.filter_by(crane_id=crane.id).first()
+                last_replaced = float(wr.last_replaced_hours) if (wr and wr.last_replaced_hours is not None) else 0.0
+                wire_rope_hours = total_usage - last_replaced
+
                 result.append({
                     "id": crane.id,
                     "crane_number": crane.crane_number,
@@ -158,7 +164,7 @@ class Create_crane(Resource):
                     } if crane.site else None,
                     "latitude": crane.latitude,
                     "longitude": crane.longitude,
-                    "total_usage_hours": total_usage,
+                    "total_usage_hours": wire_rope_hours,
                     "alert": alert,
                 })
 
