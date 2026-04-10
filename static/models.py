@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, func
 from sqlalchemy.orm import validates
 from sqlalchemy.dialects.mysql import LONGTEXT
+from sqlalchemy.exc import IntegrityError, OperationalError
 from flask_sqlalchemy import SQLAlchemy
 from flask import g, request
 
@@ -32,8 +33,12 @@ class BaseTable(db.Model):
     __table_args__ = {"mysql_charset": "utf8mb4"}
 
     id           = db.Column(db.Integer, primary_key=True)
-    created_at = db.Column(db.DateTime(timezone=True), default=datetime.datetime.now(tz))
-    updated_at = db.Column(db.DateTime(timezone=True), default=datetime.datetime.now(tz), onupdate=datetime.datetime.now(tz))
+    created_at = db.Column(db.DateTime(timezone=True), default=lambda: datetime.datetime.now(tz))
+    updated_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(tz),
+        onupdate=lambda: datetime.datetime.now(tz),
+    )
 
 
 class User(BaseTable):
@@ -135,12 +140,12 @@ class CraneUsage(BaseTable):
 
     crane_id       = db.Column(db.Integer, db.ForeignKey('cranes.id'), nullable=False, unique=True)
     total_hours    = db.Column(db.Float, nullable=False, default=0.0)
-    last_recalc_at = db.Column(db.DateTime(timezone=True), default=datetime.datetime.now(tz))
+    last_recalc_at = db.Column(db.DateTime(timezone=True), default=lambda: datetime.datetime.now(tz))
 
     # 多對一關係：一台吊車對多筆使用紀錄
     crane = db.relationship("Crane", back_populates="usages")
     def __repr__(self):
-        return f"<CraneUsage crane_id={self.crane_id}, date={self.usage_date}, hours={self.daily_hours}>"
+        return f"<CraneUsage crane_id={self.crane_id}, total_hours={self.total_hours}>"
 
 # ------------ Crane ←→ CraneNotice ------------ #
 class CraneNotice(BaseTable):
@@ -530,7 +535,7 @@ class SOPVideo(BaseTable):
 def _sum_usage_hours(crane_id: int) -> float | None:
     """
     總時數 = initial_hours + Σ DailyTask.work_time（is_deleted=False）
-    同步寫回一對一的 CraneUsage（快取）
+    僅計算，不在查詢流程同步寫回 crane_usages。
     """
     crane = Crane.query.get(crane_id)
     if not crane:
@@ -545,15 +550,71 @@ def _sum_usage_hours(crane_id: int) -> float | None:
 
     base  = float(crane.initial_hours or 0.0)
     total = base + float(total_work)
+    return total
 
-    usage = CraneUsage.query.filter_by(crane_id=crane_id).with_for_update().first()
-    if usage is None:
-        db.session.add(CraneUsage(crane_id=crane_id, total_hours=total))
-    else:
-        usage.total_hours = total
-        usage.last_recalc_at = datetime.datetime.now(tz)
+def _sync_usage_hours_cache(crane_id: int, total: float | None = None) -> float | None:
+    """
+    將累計工時同步寫回 crane_usages 快取。
+    只應在真正的寫入流程後呼叫，避免 GET 期間更新快取造成競態與鎖衝突。
+    """
+    crane = Crane.query.get(crane_id)
+    if not crane:
+        return None
 
-    db.session.commit()
+    if total is None:
+        total = _sum_usage_hours(crane_id)
+    if total is None:
+        return None
+
+    now = datetime.datetime.now(tz)
+
+    try:
+        updated = (
+            CraneUsage.query
+            .filter_by(crane_id=crane_id)
+            .update(
+                {
+                    CraneUsage.total_hours: total,
+                    CraneUsage.last_recalc_at: now,
+                    CraneUsage.updated_at: now,
+                },
+                synchronize_session=False,
+            )
+        )
+
+        if not updated:
+            try:
+                db.session.add(
+                    CraneUsage(
+                        crane_id=crane_id,
+                        total_hours=total,
+                        last_recalc_at=now,
+                    )
+                )
+                db.session.commit()
+            except IntegrityError:
+                db.session.rollback()
+                (
+                    CraneUsage.query
+                    .filter_by(crane_id=crane_id)
+                    .update(
+                        {
+                            CraneUsage.total_hours: total,
+                            CraneUsage.last_recalc_at: now,
+                            CraneUsage.updated_at: now,
+                        },
+                        synchronize_session=False,
+                    )
+                )
+                db.session.commit()
+        else:
+            db.session.commit()
+    except OperationalError:
+        db.session.rollback()
+        fresh = CraneUsage.query.filter_by(crane_id=crane_id).first()
+        if fresh is not None:
+            return fresh.total_hours
+        return total
     return total
 
 def _maintenance_alert(crane: "Crane", total_hours: float, info: dict) -> bool:
@@ -580,7 +641,7 @@ def _pending_parts_in_current_cycle(crane_id: int, total_hours: int | None = Non
     if not crane:
         return None, [], []
 
-    # 若沒給 total_hours，幫忙算；這也會同步快取到 CraneUsage
+    # 若沒給 total_hours，僅重新計算，不同步更新快取
     if total_hours is None:
         total_hours = _sum_usage_hours(crane_id)
         if total_hours is None:
@@ -666,6 +727,48 @@ class CraneWireRope(BaseTable):
     crane    = db.relationship("Crane", backref=db.backref("wire_rope", uselist=False,
                                                              cascade="all, delete-orphan"))
     replacer = db.relationship("User", foreign_keys=[last_replaced_by])
+
+
+# ────────── 板真鋼索更換歷程 ──────────
+class CraneWireRopeLog(BaseTable):
+    """
+    每次板真鋼索更換的歷程紀錄，保留完整歷史。
+    """
+    __tablename__ = "crane_wire_rope_logs"
+
+    crane_id       = db.Column(db.Integer, db.ForeignKey("cranes.id"), nullable=False)
+    replaced_at    = db.Column(db.DateTime(timezone=True), nullable=False,
+                               comment="更換時間")
+    replaced_hours = db.Column(db.Float, nullable=False,
+                               comment="更換時的吊車總時數")
+    replaced_by    = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    note           = db.Column(db.String(255), nullable=True,
+                               comment="備註")
+
+    crane    = db.relationship("Crane", backref=db.backref("wire_rope_logs", lazy="dynamic",
+                                                            cascade="all, delete-orphan"))
+    replacer = db.relationship("User", foreign_keys=[replaced_by])
+
+
+# 板真鋼索警示門檻（小時）
+WIRE_ROPE_THRESHOLD = {
+    True:  950,   # 履帶式
+    False: 450,   # 輪式
+}
+
+
+def _wire_rope_alert(crane: "Crane", total_hours: float) -> bool:
+    """
+    判斷板真鋼索是否需要更換警示。
+    以「上次更換時的總時數」為基準，累積超過門檻即觸發。
+    從未更換過則以 0 為基準計算。
+    - 輪式  (crane_type=False)：>= 450 hr
+    - 履帶式(crane_type=True) ：>= 950 hr
+    """
+    threshold = WIRE_ROPE_THRESHOLD[bool(crane.crane_type)]
+    wr = CraneWireRope.query.filter_by(crane_id=crane.id).first()
+    base = float(wr.last_replaced_hours) if (wr and wr.last_replaced_hours is not None) else 0.0
+    return (total_hours - base) >= threshold
 
 
 def _cycle_info(total_hours: int | float, crane_id: int | None = None) -> dict:

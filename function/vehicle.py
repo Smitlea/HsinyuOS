@@ -10,7 +10,7 @@ from sqlalchemy.orm import joinedload, selectinload
 
 from static.models import( db, Crane, User, DailyTask,
 CraneUsage, CraneNotice, CraneMaintenance, ConstructionSite, NoticeColor,
-_sum_usage_hours, _pending_parts_in_current_cycle, _maintenance_alert
+_sum_usage_hours, _sync_usage_hours_cache, _wire_rope_alert
 )
 from static.payload import (
     api_ns, api, api_crane, api_test, api_notice,
@@ -45,8 +45,7 @@ class Stats(Resource):
 
         for crane in crane_list:
             total_usage = _sum_usage_hours(crane.id) or float(crane.initial_hours or 0)
-            info, _, pending = _pending_parts_in_current_cycle(crane.id, int(total_usage))
-            alert = bool(info) and _maintenance_alert(crane, total_usage, info) and bool(pending)
+            alert = _wire_rope_alert(crane, total_usage)
 
             total_usage_hours += float(total_usage)
             if alert:
@@ -142,10 +141,9 @@ class Create_crane(Resource):
 
             result = []
             for crane in crane_list:
-                # 逐台計算使用時數與警示
+                # 逐台計算使用時數與板真鋼索警示
                 total_usage = _sum_usage_hours(crane.id) or float(crane.initial_hours)
-                info, _, pending = _pending_parts_in_current_cycle(crane.id, int(total_usage))
-                alert = bool(info) and _maintenance_alert(crane, total_usage, info) and bool(pending)
+                alert = _wire_rope_alert(crane, total_usage)
 
                 result.append({
                     "id": crane.id,
@@ -223,6 +221,7 @@ class Create_crane(Resource):
                 photos_path = save_photos(crane_number, photo_list, PHOTO_DIR)
                 new_crane.photo = json.dumps(photos_path)
             db.session.commit()
+            _sync_usage_hours_cache(new_crane.id, float(initial_hours or 0.0))
             
             return {"status": '0', "result": "拖車成功創建"}, 200
         except Exception as e:
@@ -242,8 +241,7 @@ class Crane_detail(Resource):
                 return {"status": "1", "result": "找不到指定的吊車"}, 404
             
             total_usage = _sum_usage_hours(crane.id) or float(crane.initial_hours)
-            info, _, pending = _pending_parts_in_current_cycle(crane.id, int(total_usage))
-            alert = bool(info) and _maintenance_alert(crane, total_usage, info) and bool(pending)
+            alert = _wire_rope_alert(crane, total_usage)
 
             site_data = None
             if crane.site:
@@ -321,6 +319,7 @@ class Crane_detail(Resource):
 
 
             db.session.commit()
+            _sync_usage_hours_cache(crane.id)
             return {"status": '0', "result": "拖車已成功更新."}, 200
         except Exception as e:
             error_class = e.__class__.__name__
@@ -365,8 +364,7 @@ class Create_usage(Resource):
             } for t in tasks]
 
             total_usage = _sum_usage_hours(crane_id) or float(crane.initial_hours)
-            info, _, pending = _pending_parts_in_current_cycle(crane_id, int(total_usage))
-            alert = bool(info) and _maintenance_alert(crane, total_usage, info) and bool(pending)
+            alert = _wire_rope_alert(crane, total_usage)
 
             return {"status": "0", "result": {
                 "crane_id": crane_id,

@@ -9,8 +9,9 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 import datetime
 from static.models import (
     db, Crane, MaintenanceRecord, User, CraneMaintenanceState, CraneWireRope,
+    CraneWireRopeLog, WIRE_ROPE_THRESHOLD,
     _sum_usage_hours, _cycle_info, _due_parts_for_cycle,
-    _maintenance_alert, CYCLE_HOURS, CYCLES_PER_ROUND, ROUND_HOURS
+    _maintenance_alert, _wire_rope_alert, CYCLE_HOURS, CYCLES_PER_ROUND, ROUND_HOURS
 )
 from static.payload import api_ns
 from static.util import handle_request_exception
@@ -271,7 +272,7 @@ class CraneMaintenanceCreate(Resource):
     @jwt_required()
     @handle_request_exception
     def post(self, crane_id: int):
-        data = api_ns.payload or request.get_json(silent=True) or {}
+        data = request.get_json(silent=True) or {}
 
         maintenance_hours = data.get("maintenance_hours")
         date_str = data.get("date")
@@ -432,7 +433,7 @@ class MaintenanceRecordUpdate(Resource):
     @jwt_required()
     @handle_request_exception
     def put(self, record_id: int):
-        data = api_ns.payload or request.get_json(silent=True) or {}
+        data = request.get_json(silent=True) or {}
 
         r: MaintenanceRecord | None = MaintenanceRecord.query.get(record_id)
         if not r:
@@ -623,8 +624,11 @@ class CraneMaintenanceDue(Resource):
             _code_label_list(sorted(already_cons_codes),  "consumable")
         )
 
-        # 鋼索狀態
-        wire_rope = CraneWireRope.query.filter_by(crane_id=crane_id).first()
+        # 板真鋼索狀態（依小時計算）
+        wire_rope   = CraneWireRope.query.filter_by(crane_id=crane_id).first()
+        wr_threshold = WIRE_ROPE_THRESHOLD[bool(crane.crane_type)]
+        wr_base      = float(wire_rope.last_replaced_hours) if (wire_rope and wire_rope.last_replaced_hours is not None) else 0.0
+        wr_since     = round(float(total_hours) - wr_base, 1)
 
         return {
             "crane_id": crane_id,
@@ -638,8 +642,11 @@ class CraneMaintenanceDue(Resource):
             "already_replaced": already_labels,
             "pending_parts": _code_label_list(pending_part_codes, "part"),
             "wire_rope": {
-                "needs_replacement": wire_rope.needs_replacement if wire_rope else False,
-                "replacement_count": wire_rope.replacement_count if wire_rope else 0,
+                "needs_replacement":       wr_since >= wr_threshold,
+                "replacement_count":       wire_rope.replacement_count if wire_rope else 0,
+                "last_replaced_hours":     wire_rope.last_replaced_hours if wire_rope else None,
+                "hours_since_replacement": wr_since,
+                "threshold":               wr_threshold,
             },
         }, 200
 
@@ -691,7 +698,7 @@ class CraneMaintenanceStateResource(Resource):
         if not user or user.permission < 2:
             return {"error": "需要管理者權限 (permission >= 2)"}, 403
 
-        data = api_ns.payload or request.get_json(silent=True) or {}
+        data = request.get_json(silent=True) or {}
         target_cycle = data.get("target_cycle")
         if target_cycle is None:
             return {"error": "必填欄位：target_cycle (1~12)"}, 400
@@ -801,14 +808,22 @@ class CraneWireRopeResource(Resource):
             db.session.add(wr)
             db.session.commit()
 
+        total_hours = _sum_usage_hours(crane_id) or float(crane.initial_hours or 0)
+        threshold   = WIRE_ROPE_THRESHOLD[bool(crane.crane_type)]
+        base        = float(wr.last_replaced_hours) if wr.last_replaced_hours is not None else 0.0
+        hours_since = round(total_hours - base, 1)
+
         return {
             "status": "0",
             "result": {
-                "crane_id":           crane_id,
-                "needs_replacement":  wr.needs_replacement,
-                "replacement_count":  wr.replacement_count,
-                "last_replaced_at":   wr.last_replaced_at.isoformat() if wr.last_replaced_at else None,
+                "crane_id":            crane_id,
+                "needs_replacement":   hours_since >= threshold,
+                "replacement_count":   wr.replacement_count,
+                "last_replaced_at":    wr.last_replaced_at.isoformat() if wr.last_replaced_at else None,
                 "last_replaced_hours": wr.last_replaced_hours,
+                "total_hours":         total_hours,
+                "hours_since_replacement": hours_since,
+                "threshold":           threshold,
             }
         }, 200
 
@@ -826,7 +841,7 @@ class CraneWireRopeResource(Resource):
         if not crane:
             return {"error": f"找不到吊車 id={crane_id}"}, 404
 
-        data = api_ns.payload or request.get_json(silent=True) or {}
+        data = request.get_json(silent=True) or {}
         needs_replacement = data.get("needs_replacement")
         if needs_replacement is None:
             return {"error": "必填欄位：needs_replacement (true/false)"}, 400
@@ -866,6 +881,11 @@ class CraneWireRopeReset(Resource):
         if total_hours is None:
             return {"error": f"找不到吊車 id={crane_id}"}, 404
 
+        data = request.get_json(silent=True) or {}
+        note = data.get("note")
+
+        now = datetime.datetime.now(tz)
+
         wr = CraneWireRope.query.filter_by(crane_id=crane_id).first()
         if wr is None:
             wr = CraneWireRope(crane_id=crane_id)
@@ -873,10 +893,23 @@ class CraneWireRopeReset(Resource):
 
         wr.needs_replacement   = False
         wr.replacement_count  += 1
-        wr.last_replaced_at    = datetime.datetime.now(tz)
+        wr.last_replaced_at    = now
         wr.last_replaced_hours = float(total_hours)
         wr.last_replaced_by    = user.id
+
+        # 寫入更換歷程
+        log = CraneWireRopeLog(
+            crane_id       = crane_id,
+            replaced_at    = now,
+            replaced_hours = float(total_hours),
+            replaced_by    = user.id,
+            note           = note,
+        )
+        db.session.add(log)
         db.session.commit()
+
+        crane = Crane.query.get(crane_id)
+        threshold = WIRE_ROPE_THRESHOLD[bool(crane.crane_type)] if crane else None
 
         return {
             "status": "0",
@@ -885,6 +918,45 @@ class CraneWireRopeReset(Resource):
                 "needs_replacement":   False,
                 "replacement_count":   wr.replacement_count,
                 "last_replaced_hours": wr.last_replaced_hours,
-                "message":             "鋼索已標記為更換完成",
+                "threshold":           threshold,
+                "message":             "板真鋼索已標記為更換完成，計時重置",
             }
+        }, 200
+
+
+# =================================================================
+#  板真鋼索更換歷程
+#  GET /api/cranes/<id>/wire-rope/logs  → 查詢所有更換紀錄
+# =================================================================
+@api_ns.route("/api/cranes/<int:crane_id>/wire-rope/logs", methods=["GET"])
+class CraneWireRopeLogs(Resource):
+
+    @jwt_required()
+    @handle_request_exception
+    def get(self, crane_id: int):
+        """查詢板真鋼索更換歷程（所有已登入使用者可查看）"""
+        crane = Crane.query.get(crane_id)
+        if not crane:
+            return {"error": f"找不到吊車 id={crane_id}"}, 404
+
+        logs = (
+            CraneWireRopeLog.query
+            .filter_by(crane_id=crane_id)
+            .order_by(CraneWireRopeLog.replaced_at.desc())
+            .all()
+        )
+
+        return {
+            "status": "0",
+            "result": [
+                {
+                    "id":             log.id,
+                    "crane_id":       log.crane_id,
+                    "replaced_at":    log.replaced_at.isoformat(),
+                    "replaced_hours": log.replaced_hours,
+                    "replaced_by":    log.replaced_by,
+                    "note":           log.note,
+                }
+                for log in logs
+            ]
         }, 200
