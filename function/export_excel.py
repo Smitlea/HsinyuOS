@@ -15,7 +15,7 @@ from flask_restx import Resource
 from static.models import (
     db, User, ConstructionSite, Crane, DailyTask, TaskMaintenance,
     WorkRecord, Truck, OilDrumRecord, TruckFuelRecord,
-    CraneMaintenance, MaintenanceRecord,
+    CraneMaintenance, MaintenanceRecord, CraneWireRopeLog,
     _due_parts_for_cycle, CYCLE_HOURS, ROUND_HOURS
 )
 
@@ -504,3 +504,50 @@ class ExportMaintenance(Resource):
         if not df.empty:
             df = df.dropna(how="all").sort_values(["日期", "車號"], kind="mergesort")
         return _send_df_as_excel(df, filename=f"保養紀錄_{year}.xlsx", sheet_name="保養紀錄")
+
+# ---------- 5) 板真鋼索保養紀錄 ----------
+@api.route("/api/export/wire-rope")
+class ExportWireRope(Resource):
+    def get(self):
+        """
+        欄位：日期, 車號, 更換時數, 操作人員, 備註
+        來源：CraneWireRopeLog（依 replaced_at 年份過濾）
+        """
+        year, start, end = _parse_year()
+
+        # 預先載入所有 user id → nickname
+        user_map = {u.id: (u.nickname or u.username)
+                    for u in db.session.query(User).all()}
+
+        logs = (
+            db.session.query(CraneWireRopeLog)
+            .options(joinedload(CraneWireRopeLog.crane))
+            .filter(
+                and_(
+                    CraneWireRopeLog.replaced_at >= dt.datetime(year, 1, 1, tzinfo=tz),
+                    CraneWireRopeLog.replaced_at <  dt.datetime(year + 1, 1, 1, tzinfo=tz),
+                )
+            )
+            .order_by(CraneWireRopeLog.replaced_at.asc(),
+                      CraneWireRopeLog.crane_id.asc())
+            .all()
+        )
+
+        rows = []
+        for log in logs:
+            rows.append({
+                "日期":     log.replaced_at.astimezone(tz).date(),
+                "車號":     log.crane.crane_number if log.crane else None,
+                "更換時數": log.replaced_hours,
+                "操作人員": user_map.get(log.replaced_by) if log.replaced_by else None,
+                "備註":     log.note,
+            })
+
+        df = pd.DataFrame.from_records(rows)
+        if not df.empty:
+            df = df.dropna(how="all").sort_values(["日期", "車號"], kind="mergesort")
+        return _send_df_as_excel(
+            df,
+            filename=f"板真鋼索保養紀錄_{year}.xlsx",
+            sheet_name="板真鋼索保養紀錄"
+        )

@@ -5,10 +5,11 @@ import pytz
 from flask import request   # 不要用 jsonify，讓 RESTX 幫你序列化
 from flask_restx import Resource
 from flask_jwt_extended import jwt_required, get_jwt_identity
+from sqlalchemy import func
 
 import datetime
 from static.models import (
-    db, Crane, MaintenanceRecord, User, CraneMaintenanceState, CraneWireRope,
+    db, Crane, DailyTask, MaintenanceRecord, User, CraneMaintenanceState, CraneWireRope,
     CraneWireRopeLog, WIRE_ROPE_THRESHOLD,
     _sum_usage_hours, _cycle_info, _due_parts_for_cycle,
     _maintenance_alert, _wire_rope_alert, CYCLE_HOURS, CYCLES_PER_ROUND, ROUND_HOURS
@@ -693,6 +694,8 @@ class CraneMaintenanceStateResource(Resource):
     def put(self, crane_id: int):
         """調整吊車保養至指定週期（需 permission >= 2）
         Body: { "target_cycle": 3 }
+        - 累計工時自動調整至該週期的最小值：(target_cycle - 1) × 500 hr
+        - 過往未保養項目一律無視，從調整後的時數重新計算
         """
         user = User.query.get(get_jwt_identity())
         if not user or user.permission < 2:
@@ -709,17 +712,31 @@ class CraneMaintenanceStateResource(Resource):
         if not (1 <= target_cycle <= CYCLES_PER_ROUND):
             return {"error": f"target_cycle 需介於 1~{CYCLES_PER_ROUND}"}, 400
 
-        total_hours = _sum_usage_hours(crane_id)
-        if total_hours is None:
+        crane = Crane.query.get(crane_id)
+        if crane is None:
             return {"error": f"找不到吊車 id={crane_id}"}, 404
 
-        # 計算使當前週期 == target_cycle 所需的 round_base_hours
-        # cycle_index = ((total - base) // 500) + 1  →  base = total - (target-1)*500
+        # ── 將累計工時調整至該週期最小值 ──
+        target_total = float((target_cycle - 1) * CYCLE_HOURS)
+
+        daily_work = db.session.query(
+            func.coalesce(func.sum(DailyTask.work_time), 0.0)
+        ).filter(
+            DailyTask.crane_id == crane_id,
+            DailyTask.is_deleted.is_(False)
+        ).scalar() or 0.0
+
+        # initial_hours = 目標總時數 - 已記錄 DailyTask 工時（最低 0）
+        crane.initial_hours = int(max(0.0, target_total - float(daily_work)))
+        db.session.flush()  # 讓 _sum_usage_hours 讀到更新後的值
+
+        total_hours = _sum_usage_hours(crane_id)
+
+        # round_base = total - (target-1)*500
+        # 若 daily_work > target_total，total_hours > target_total，
+        # new_base 可能為負，但 _cycle_info 仍能正確計算，
+        # 且 cycle_start == target_total，過往紀錄自然落在範圍外。
         new_base = int(total_hours) - (target_cycle - 1) * CYCLE_HOURS
-        if new_base < 0:
-            return {
-                "error": f"目前總時數 {total_hours}hr 不足以設定至第 {target_cycle} 週期"
-            }, 400
 
         state = CraneMaintenanceState.query.filter_by(crane_id=crane_id).first()
         if state is None:
@@ -737,11 +754,12 @@ class CraneMaintenanceStateResource(Resource):
         return {
             "status": "0",
             "result": {
-                "crane_id":        crane_id,
-                "current_cycle":   info["cycle_index"],
+                "crane_id":         crane_id,
+                "current_cycle":    info["cycle_index"],
+                "total_hours":      total_hours,
                 "round_base_hours": state.round_base_hours,
-                "initial_cycle":   state.initial_cycle,
-                "reset_count":     state.reset_count,
+                "initial_cycle":    state.initial_cycle,
+                "reset_count":      state.reset_count,
             }
         }, 200
 
