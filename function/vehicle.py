@@ -11,7 +11,7 @@ from sqlalchemy.orm import joinedload, selectinload
 from static.models import( db, Crane, User, DailyTask,
 CraneUsage, CraneNotice, CraneMaintenance, ConstructionSite, NoticeColor,
 CraneWireRope,
-_sum_usage_hours, _sync_usage_hours_cache, _wire_rope_alert
+_sum_usage_hours, _sync_usage_hours_cache, _maintenance_alert, _pending_parts_in_current_cycle
 )
 from static.payload import (
     api_ns, api, api_crane, api_test, api_notice,
@@ -46,7 +46,8 @@ class Stats(Resource):
 
         for crane in crane_list:
             total_usage = _sum_usage_hours(crane.id) or float(crane.initial_hours or 0)
-            alert = _wire_rope_alert(crane, total_usage)
+            info, _, pending = _pending_parts_in_current_cycle(crane.id, int(total_usage))
+            alert = bool(info) and _maintenance_alert(crane, total_usage, info) and bool(pending)
 
             total_usage_hours += float(total_usage)
             if alert:
@@ -142,14 +143,15 @@ class Create_crane(Resource):
 
             result = []
             for crane in crane_list:
-                # 逐台計算使用時數與板真鋼索警示
-                total_usage = _sum_usage_hours(crane.id) or float(crane.initial_hours)
-                alert = _wire_rope_alert(crane, total_usage)
+                # 逐台計算實際累計時數（用於保養警示判斷）
+                maintain_hours = _sum_usage_hours(crane.id) or float(crane.initial_hours)
+                info, _, pending = _pending_parts_in_current_cycle(crane.id, int(maintain_hours))
+                alert = bool(info) and _maintenance_alert(crane, maintain_hours, info) and bool(pending)
 
-                # 計算自上次換索以來的累積時數，作為 total_usage_hours 回傳給 App 顯示天數
+                # 板真鋼索使用時數（自上次換索起算，前端用此計算工作天數）
                 wr = CraneWireRope.query.filter_by(crane_id=crane.id).first()
                 last_replaced = float(wr.last_replaced_hours) if (wr and wr.last_replaced_hours is not None) else 0.0
-                wire_rope_hours = total_usage - last_replaced
+                total_usage_hours = round(maintain_hours - last_replaced, 1)
 
                 result.append({
                     "id": crane.id,
@@ -164,7 +166,8 @@ class Create_crane(Resource):
                     } if crane.site else None,
                     "latitude": crane.latitude,
                     "longitude": crane.longitude,
-                    "total_usage_hours": wire_rope_hours,
+                    "total_usage_hours": total_usage_hours,
+                    "maintain_hours": maintain_hours,
                     "alert": alert,
                 })
 
@@ -246,8 +249,13 @@ class Crane_detail(Resource):
             if crane is None:
                 return {"status": "1", "result": "找不到指定的吊車"}, 404
             
-            total_usage = _sum_usage_hours(crane.id) or float(crane.initial_hours)
-            alert = _wire_rope_alert(crane, total_usage)
+            maintain_hours = _sum_usage_hours(crane.id) or float(crane.initial_hours)
+            info, _, pending = _pending_parts_in_current_cycle(crane.id, int(maintain_hours))
+            alert = bool(info) and _maintenance_alert(crane, maintain_hours, info) and bool(pending)
+
+            wr = CraneWireRope.query.filter_by(crane_id=crane.id).first()
+            last_replaced = float(wr.last_replaced_hours) if (wr and wr.last_replaced_hours is not None) else 0.0
+            total_usage_hours = round(maintain_hours - last_replaced, 1)
 
             site_data = None
             if crane.site:
@@ -266,7 +274,8 @@ class Crane_detail(Resource):
                 "crane_number": crane.crane_number,
                 "crane_type": crane.crane_type,
                 "site": site_data,
-                "total_usage_hours": total_usage,
+                "total_usage_hours": total_usage_hours,
+                "maintain_hours": maintain_hours,
                 "alert": alert
             }
             return {"status": '0', "result": data}, 200
@@ -369,15 +378,21 @@ class Create_usage(Resource):
                 "note": t.note,
             } for t in tasks]
 
-            total_usage = _sum_usage_hours(crane_id) or float(crane.initial_hours)
-            alert = _wire_rope_alert(crane, total_usage)
+            maintain_hours = _sum_usage_hours(crane_id) or float(crane.initial_hours)
+            info, _, pending = _pending_parts_in_current_cycle(crane_id, int(maintain_hours))
+            alert = bool(info) and _maintenance_alert(crane, maintain_hours, info) and bool(pending)
+
+            wr = CraneWireRope.query.filter_by(crane_id=crane_id).first()
+            last_replaced = float(wr.last_replaced_hours) if (wr and wr.last_replaced_hours is not None) else 0.0
+            total_usage_hours = round(maintain_hours - last_replaced, 1)
 
             return {"status": "0", "result": {
                 "crane_id": crane_id,
                 "items": items,
                 "summary": {
                     "initial_hours": float(crane.initial_hours),
-                    "total_usage_hours": total_usage,
+                    "total_usage_hours": total_usage_hours,
+                    "maintain_hours": maintain_hours,
                     "alert": alert,
                 }
             }}, 200

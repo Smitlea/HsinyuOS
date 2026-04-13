@@ -848,8 +848,15 @@ class CraneWireRopeResource(Resource):
     @jwt_required()
     @handle_request_exception
     def put(self, crane_id: int):
-        """後台手動設定鋼索狀態（需 permission >= 2）
-        Body: { "needs_replacement": true/false }
+        """後台設定板真鋼索初始狀態（需 permission >= 2）
+
+        用途：車輛引入系統時，設定上次換索當時的時數與日期基準值，
+        不產生更換紀錄（replacement_count 不累加）。
+
+        Body（all optional）:
+          last_replaced_hours: float   - 上次換索時的吊車總時數（初始基準）
+          last_replaced_at:    string  - 上次換索日期，格式 "YYYY-MM-DD"
+          note:                string  - 備註
         """
         user = User.query.get(get_jwt_identity())
         if not user or user.permission < 2:
@@ -860,24 +867,49 @@ class CraneWireRopeResource(Resource):
             return {"error": f"找不到吊車 id={crane_id}"}, 404
 
         data = request.get_json(silent=True) or {}
-        needs_replacement = data.get("needs_replacement")
-        if needs_replacement is None:
-            return {"error": "必填欄位：needs_replacement (true/false)"}, 400
 
         wr = CraneWireRope.query.filter_by(crane_id=crane_id).first()
         if wr is None:
             wr = CraneWireRope(crane_id=crane_id)
             db.session.add(wr)
 
-        wr.needs_replacement = bool(needs_replacement)
+        # 設定上次換索時數基準
+        if "last_replaced_hours" in data:
+            try:
+                wr.last_replaced_hours = float(data["last_replaced_hours"])
+            except (ValueError, TypeError):
+                return {"error": "last_replaced_hours 需為數字"}, 400
+
+        # 設定上次換索日期
+        if "last_replaced_at" in data:
+            date_str = data["last_replaced_at"]
+            if date_str:
+                try:
+                    d = datetime.datetime.strptime(date_str, "%Y-%m-%d")
+                    wr.last_replaced_at = tz.localize(d)
+                except ValueError:
+                    return {"error": "last_replaced_at 格式錯誤，請用 YYYY-MM-DD"}, 400
+            else:
+                wr.last_replaced_at = None
+
+        wr.last_replaced_by = user.id
         db.session.commit()
+
+        total_hours = _sum_usage_hours(crane_id) or float(crane.initial_hours or 0)
+        threshold   = WIRE_ROPE_THRESHOLD[bool(crane.crane_type)]
+        base        = float(wr.last_replaced_hours) if wr.last_replaced_hours is not None else 0.0
+        hours_since = round(total_hours - base, 1)
 
         return {
             "status": "0",
             "result": {
-                "crane_id":          crane_id,
-                "needs_replacement": wr.needs_replacement,
-                "replacement_count": wr.replacement_count,
+                "crane_id":                crane_id,
+                "last_replaced_hours":     wr.last_replaced_hours,
+                "last_replaced_at":        wr.last_replaced_at.isoformat() if wr.last_replaced_at else None,
+                "replacement_count":       wr.replacement_count,
+                "hours_since_replacement": hours_since,
+                "threshold":               threshold,
+                "message":                 "板真鋼索初始狀態已更新",
             }
         }, 200
 
@@ -888,21 +920,50 @@ class CraneWireRopeReset(Resource):
     @jwt_required()
     @handle_request_exception
     def post(self, crane_id: int):
-        """老闆更換鋼索後手動重置（任意已登入使用者皆可操作）
-        重置後：needs_replacement=False，replacement_count+1，記錄當時時數
+        """更換板真鋼索後重置計時（任意已登入使用者皆可操作）
+
+        重置後：replacement_count+1，以指定（或當前）時數/日期為新基準。
+
+        Body（all optional）:
+          replaced_at:    string  - 實際更換日期，格式 "YYYY-MM-DD"，預設今天
+          replaced_hours: float   - 更換當時吊車時數，預設目前累計時數
+          note:           string  - 備註
         """
         user = User.query.get(get_jwt_identity())
         if not user:
             return {"error": "使用者不存在"}, 403
 
-        total_hours = _sum_usage_hours(crane_id)
-        if total_hours is None:
+        crane = Crane.query.get(crane_id)
+        if not crane:
+            return {"error": f"找不到吊車 id={crane_id}"}, 404
+
+        current_total = _sum_usage_hours(crane_id)
+        if current_total is None:
             return {"error": f"找不到吊車 id={crane_id}"}, 404
 
         data = request.get_json(silent=True) or {}
         note = data.get("note")
 
-        now = datetime.datetime.now(tz)
+        # ── 解析更換日期（可選，預設今天）──
+        replaced_at_str = data.get("replaced_at")
+        if replaced_at_str:
+            try:
+                d = datetime.datetime.strptime(replaced_at_str, "%Y-%m-%d")
+                replaced_at = tz.localize(d)
+            except ValueError:
+                return {"error": "replaced_at 格式錯誤，請用 YYYY-MM-DD"}, 400
+        else:
+            replaced_at = datetime.datetime.now(tz)
+
+        # ── 解析更換時數（可選，預設目前累計時數）──
+        replaced_hours_raw = data.get("replaced_hours")
+        if replaced_hours_raw is not None:
+            try:
+                replaced_hours = float(replaced_hours_raw)
+            except (ValueError, TypeError):
+                return {"error": "replaced_hours 需為數字"}, 400
+        else:
+            replaced_hours = float(current_total)
 
         wr = CraneWireRope.query.filter_by(crane_id=crane_id).first()
         if wr is None:
@@ -911,23 +972,22 @@ class CraneWireRopeReset(Resource):
 
         wr.needs_replacement   = False
         wr.replacement_count  += 1
-        wr.last_replaced_at    = now
-        wr.last_replaced_hours = float(total_hours)
+        wr.last_replaced_at    = replaced_at
+        wr.last_replaced_hours = replaced_hours
         wr.last_replaced_by    = user.id
 
         # 寫入更換歷程
         log = CraneWireRopeLog(
             crane_id       = crane_id,
-            replaced_at    = now,
-            replaced_hours = float(total_hours),
+            replaced_at    = replaced_at,
+            replaced_hours = replaced_hours,
             replaced_by    = user.id,
             note           = note,
         )
         db.session.add(log)
         db.session.commit()
 
-        crane = Crane.query.get(crane_id)
-        threshold = WIRE_ROPE_THRESHOLD[bool(crane.crane_type)] if crane else None
+        threshold = WIRE_ROPE_THRESHOLD[bool(crane.crane_type)]
 
         return {
             "status": "0",
@@ -935,6 +995,7 @@ class CraneWireRopeReset(Resource):
                 "crane_id":            crane_id,
                 "needs_replacement":   False,
                 "replacement_count":   wr.replacement_count,
+                "last_replaced_at":    replaced_at.strftime("%Y-%m-%d"),
                 "last_replaced_hours": wr.last_replaced_hours,
                 "threshold":           threshold,
                 "message":             "板真鋼索已標記為更換完成，計時重置",
