@@ -11,7 +11,7 @@ import datetime
 from static.models import (
     db, Crane, DailyTask, MaintenanceRecord, User, CraneMaintenanceState, CraneWireRope,
     CraneWireRopeLog, WIRE_ROPE_THRESHOLD,
-    _sum_usage_hours, _cycle_info, _due_parts_for_cycle,
+    _sum_usage_hours, _sync_usage_hours_cache, _cycle_info, _due_parts_for_cycle,
     _maintenance_alert, _wire_rope_alert, CYCLE_HOURS, CYCLES_PER_ROUND, ROUND_HOURS
 )
 from static.payload import api_ns
@@ -348,7 +348,53 @@ class CraneMaintenanceCreate(Resource):
             created_by=user.id
         )
         db.session.add(record)
+
+        # ── 登記保養後直接進入下一個週期 ──
+        # 累計工時推進到下一週期起點（例如 0~500hr 中途保養 → 跳到 500hr 進入第 2 週期）。
+        # 僅當本次保養時數落在「當前週期」內才跳，補登過往週期的紀錄不影響現況。
+        cycle_jump = None
+        total_now = _sum_usage_hours(crane_id)
+        info_now = _cycle_info(int(total_now), crane_id)
+        if info_now["cycle_start"] <= int(maintenance_hours) < info_now["cycle_end"]:
+            target_total = float(info_now["cycle_end"])
+            delta = target_total - float(total_now)
+            if delta > 0:
+                daily_work = db.session.query(
+                    func.coalesce(func.sum(DailyTask.work_time), 0.0)
+                ).filter(
+                    DailyTask.crane_id == crane_id,
+                    DailyTask.is_deleted.is_(False)
+                ).scalar() or 0.0
+                crane.initial_hours = int(max(0.0, target_total - float(daily_work)))
+
+                # 板真鋼索基準同步墊高：跳週期灌入的虛擬時數不得計入鋼索使用時數，
+                # 否則輪式 450hr 門檻會被跳出來的時數提早觸發換索警報。
+                wr = CraneWireRope.query.filter_by(crane_id=crane_id).first()
+                if wr is None:
+                    wr = CraneWireRope(crane_id=crane_id)
+                    db.session.add(wr)
+                wr.last_replaced_hours = float(wr.last_replaced_hours or 0.0) + delta
+                db.session.flush()
+
+            new_total = _sum_usage_hours(crane_id)
+            new_info = _cycle_info(int(new_total), crane_id)
+            cycle_jump = {
+                "previous_cycle": info_now["cycle_index"],
+                "current_cycle":  new_info["cycle_index"],
+                "cycle_start":    new_info["cycle_start"],
+                "cycle_end":      new_info["cycle_end"],
+                "total_hours":    new_total,
+            }
+
         db.session.commit()
+
+        if cycle_jump:
+            _sync_usage_hours_cache(crane_id)
+            logger.info(
+                f"Maintenance cycle jump: crane={crane_id} "
+                f"cycle {cycle_jump['previous_cycle']} → {cycle_jump['current_cycle']} "
+                f"(total_hours={cycle_jump['total_hours']})"
+            )
 
         return {
                 "status": "0",
@@ -361,6 +407,7 @@ class CraneMaintenanceCreate(Resource):
                     "consumables": [CONSUMABLE_LABELS.get(c, c) for c in (record.consumables or [])],
                     "note": record.note,
                 },
+                "cycle_jump": cycle_jump,
             }, 200
 
 
